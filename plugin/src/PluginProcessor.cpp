@@ -1,3 +1,6 @@
+// Rockband Mod (2026) -- modified from the original GH MIDI by Michael Loya
+// (michaelloya.studio), AGPL-3.0. See README.md for the full credit / changes
+// note (AGPL-3.0 §5a).
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include <cstdlib>
@@ -98,8 +101,18 @@ GuitarService::~GuitarService()
 // ---------- settings persistence ----------
 juce::File GuitarService::settingsFile()
 {
-    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("Application Support/GH MIDI/settings.json");
+    // Own folder name (not the original's "GH MIDI") so this mod never
+    // shares -- and silently clobbers -- settings with an original GH MIDI
+    // install on the same machine. "Application Support" is a macOS
+    // convention baked into the child path, not part of the special
+    // location itself, so it's only added on that platform.
+    auto dir = juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory);
+   #if JUCE_MAC
+    dir = dir.getChildFile("Application Support/GH MIDI Rockband Mod");
+   #else
+    dir = dir.getChildFile("GH MIDI Rockband Mod");
+   #endif
+    return dir.getChildFile("settings.json");
 }
 
 static void varToMap(const juce::var& v, GuitarService::ControllerMap& m)
@@ -166,6 +179,15 @@ void GuitarService::applyMapForDevice()
     ++mapVersion;
 }
 
+void GuitarService::applyMidiOutput()
+{
+    juce::String id;
+    { const juce::ScopedLock sl(midiOutLock); id = midiOutId; }
+    realMidiOut.reset();
+    if (id.isNotEmpty())
+        realMidiOut = juce::MidiOutput::openDevice(id);
+}
+
 void GuitarService::loadSettings()
 {
     const auto v = juce::JSON::parse(settingsFile());
@@ -180,6 +202,7 @@ void GuitarService::loadSettings()
         virtualMidiOn = get("virtualMidi", 1) != 0;
         strumSustain = get("strumSustain", 0) != 0;
         strumRollMs = juce::jlimit(0, 50, get("strumRoll", 10));
+        midiOutId = v["midiOutId"].toString();
         if (v["controllers"].isObject())
             controllersVar = v["controllers"];
         else if (v.hasProperty("fretG"))
@@ -213,6 +236,7 @@ void GuitarService::saveSettings()
     o->setProperty("virtualMidi", virtualMidiOn.load() ? 1 : 0);
     o->setProperty("strumSustain", strumSustain.load() ? 1 : 0);
     o->setProperty("strumRoll", strumRollMs.load());
+    o->setProperty("midiOutId", currentMidiOutId());
     o->setProperty("controllers", controllersVar);
 
     auto f = settingsFile();
@@ -312,6 +336,10 @@ void GuitarService::sendMsg(const juce::MidiMessage& m)
     // "GH MIDI" virtual source: lets the DAW record the performance as notes
     if (virtualMidiOn.load() && virtualOut != nullptr)
         virtualOut->sendMessageNow(msg);
+    // Windows (or anywhere else a virtual port couldn't be created): a real,
+    // user-picked MIDI output stands in, e.g. a loopMIDI port
+    if (virtualMidiOn.load() && realMidiOut != nullptr)
+        realMidiOut->sendMessageNow(msg);
 }
 
 void GuitarService::noteOn(int note, int vel)
@@ -392,7 +420,18 @@ void GuitarService::run()
     uint8_t buf[64];
     int shorts = 0, polls = 0;
     hid_init();
+    // MidiOutput::createNewDevice() isn't just runtime-unreliable on Windows,
+    // it doesn't exist there at all -- JUCE only declares it under
+    // `#if JUCE_LINUX || JUCE_BSD || JUCE_MAC || JUCE_IOS` (juce_MidiDevices.h).
+    // Match that exact guard rather than JUCE_WINDOWS/!JUCE_WINDOWS, so this
+    // keeps compiling correctly if JUCE's own platform list ever changes.
+   #if JUCE_LINUX || JUCE_BSD || JUCE_MAC || JUCE_IOS
     virtualOut = juce::MidiOutput::createNewDevice("GH MIDI");
+    hasVirtualPort = virtualOut != nullptr;
+   #else
+    hasVirtualPort = false;
+   #endif
+    applyMidiOutput();  // apply any previously-saved real-output pick
 
     while (! threadShouldExit())
     {
@@ -410,6 +449,8 @@ void GuitarService::run()
             saveSettings();
         if (scanRequest.exchange(false))
             scanDevices();
+        if (midiOutRequest.exchange(false))
+            applyMidiOutput();
         if (reconnectRequest.exchange(false))
         {
             if (dev != nullptr)
@@ -512,6 +553,7 @@ void GuitarService::run()
     }
     allOff();
     virtualOut.reset();
+    realMidiOut.reset();
     if (dev != nullptr)
     {
         hid_close(dev);

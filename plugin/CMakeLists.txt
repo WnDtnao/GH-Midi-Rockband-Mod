@@ -1,11 +1,17 @@
+# Rockband Mod (2026) -- modified from the original GH MIDI by Michael Loya
+# (michaelloya.studio), AGPL-3.0. This file adds Windows/Linux build support;
+# see README.md for the full credit / changes note (AGPL-3.0 §5a).
 cmake_minimum_required(VERSION 3.24)
-project(GHMidi VERSION 1.1.0)
+project(GHMidi VERSION 2.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-# universal binary so Intel Macs can run it too
-set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
-set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
+
+if(APPLE)
+    # universal binary so Intel Macs can run it too
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
+endif()
 
 include(FetchContent)
 FetchContent_Declare(JUCE
@@ -17,6 +23,12 @@ FetchContent_Declare(JUCE
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)  # hidapi declares an old minimum
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(HIDAPI_BUILD_HIDTEST OFF CACHE BOOL "" FORCE)
+if(UNIX AND NOT APPLE)
+    # hidraw backend only -- skip hidapi's libusb backend so Linux builds
+    # don't also need libusb-1.0-dev. hidraw itself needs libudev-dev
+    # (see README's Linux build section).
+    set(HIDAPI_WITH_LIBUSB OFF CACHE BOOL "" FORCE)
+endif()
 FetchContent_Declare(hidapi
     GIT_REPOSITORY https://github.com/libusb/hidapi.git
     GIT_TAG hidapi-0.14.0
@@ -24,16 +36,27 @@ FetchContent_Declare(hidapi
 
 FetchContent_MakeAvailable(JUCE hidapi)
 
+# Tried a MinGW-w64/Ninja toolchain here first (no static linker workaround
+# needed, in case you're tempted): JUCE 8 has actually dropped MinGW support
+# outright (its own juce_TargetPlatform.h says so), and fails compiling
+# juce_gui_basics' Windows UI-Automation accessibility code -- MinGW's headers
+# don't declare CaretPosition_BeginningOfLine and friends. On Windows this
+# needs real MSVC (Visual Studio 2022, "Desktop development with C++"); see
+# README.md's Windows build section.
+
 juce_add_plugin(GHMidi
-    COMPANY_NAME "Michael Loya Studio"
-    COMPANY_WEBSITE "https://michaelloya.studio"
-    BUNDLE_ID "studio.michaelloya.ghmidi"
-    PRODUCT_NAME "GH MIDI"
-    PLUGIN_MANUFACTURER_CODE Loya
-    PLUGIN_CODE Ghmd
+    # Publisher identity for this mod -- deliberately distinct from the
+    # original's "Michael Loya Studio" / studio.michaelloya.ghmidi / Ghmd so
+    # both plugins can be installed side by side without a VST3 UID clash.
+    # Original-work credit lives in README.md, not here (see AGPL-3.0 §5a).
+    COMPANY_NAME "NW Studio"
+    BUNDLE_ID "studio.nwstudio.ghmidirockbandmod"
+    PRODUCT_NAME "GH MIDI Rockband Mod"
+    PLUGIN_MANUFACTURER_CODE Nwst
+    PLUGIN_CODE Ghrb
     FORMATS VST3 Standalone
     IS_SYNTH TRUE
-    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_INPUT TRUE
     NEEDS_MIDI_OUTPUT TRUE
     IS_MIDI_EFFECT FALSE
     # JUCE's standalone Options menu always offers "Bluetooth MIDI", and
@@ -41,7 +64,8 @@ juce_add_plugin(GHMidi
     # Info.plist macOS does not deny the request, it SIGABRTs the process --
     # confirmed in the crash report as a TCC privacy violation. GH MIDI does
     # not use Bluetooth itself; this only stops the OS killing the app when
-    # someone opens that menu item.
+    # someone opens that menu item. (Apple/Info.plist-only; harmless no-op
+    # on Windows/Linux.)
     # "GH" set in MetalMania on the app's own stage background. Regenerate
     # with tools_make_icon.py -- it ports kBgFrag out of HighwayRenderer.cpp
     # rather than upscaling a screenshot.
@@ -53,7 +77,9 @@ juce_add_plugin(GHMidi
 target_sources(GHMidi PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
-    src/HighwayRenderer.cpp)
+    src/HighwayRenderer.cpp
+    src/Theme.cpp
+    src/QuickBindPanel.cpp)
 
 juce_add_binary_data(GHMidiAssets SOURCES
     assets/MetalMania-Regular.ttf)

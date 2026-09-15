@@ -1,3 +1,8 @@
+// Rockband Mod (2026) -- modified from the original GH MIDI by Michael Loya
+// (michaelloya.studio), AGPL-3.0. See README.md for the full credit / changes
+// note (AGPL-3.0 §5a). This file adds: a real-MIDI-output fallback for
+// platforms with no virtual MIDI port (Windows), and MIDI input acceptance
+// for the upcoming pedal support.
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <hidapi.h>
@@ -52,6 +57,24 @@ public:
 
     void addClient(juce::MidiMessageCollector* c);
     void removeClient(juce::MidiMessageCollector* c);
+
+    // ---- MIDI output routing ----
+    // macOS/Linux create a virtual "GH MIDI" port automatically (CoreMIDI and
+    // the ALSA sequencer both support it). Windows has no OS-level virtual
+    // MIDI, so hasVirtualPort reads false there and the UI should offer a
+    // real MIDI output device to send to instead -- typically a loopMIDI
+    // port the user created themselves. Runtime check, not #ifdef, so it
+    // also covers CoreMIDI/ALSA failing to create a port for any reason.
+    std::atomic<bool> hasVirtualPort { false };
+    juce::Array<juce::MidiDeviceInfo> getMidiOutputs() const { return juce::MidiOutput::getAvailableDevices(); }
+    juce::String currentMidiOutId() const { const juce::ScopedLock sl(midiOutLock); return midiOutId; }
+    void selectMidiOutput(const juce::String& identifier)
+    {
+        { const juce::ScopedLock sl(midiOutLock); midiOutId = identifier; }
+        midiOutRequest = true;
+        saveRequest = true;
+        notify();
+    }
 
     // ---- live state for editors ----
     std::atomic<int> uiFretBits { 0 };
@@ -146,6 +169,7 @@ private:
     void loadSettings();
     void saveSettings();
     void applyMapForDevice();
+    void applyMidiOutput();
     juce::String deviceKey() const;
     static juce::File settingsFile();
 
@@ -158,6 +182,10 @@ private:
     juce::CriticalSection clientLock;
     juce::Array<juce::MidiMessageCollector*> clients;
     std::unique_ptr<juce::MidiOutput> virtualOut;  // created/destroyed on the guitar thread
+    std::unique_ptr<juce::MidiOutput> realMidiOut;  // Windows fallback: a real, user-picked output (e.g. loopMIDI); guitar thread only
+    mutable juce::CriticalSection midiOutLock;
+    juce::String midiOutId;
+    std::atomic<bool> midiOutRequest { false };
 
     hid_device* dev = nullptr;
     int ioMode = 0;        // 1 = get_input_report id 1 · 2 = id 0 · 3 = hid_read stream
@@ -239,7 +267,11 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override { return "GH MIDI"; }
-    bool acceptsMidi() const override { return false; }
+    // true: reserves a MIDI input bus for the pedal-as-MIDI-controller path
+    // (Rockband Mod). Nothing reads it yet -- processBlock() still clears the
+    // incoming buffer -- until pedal support lands; declared now so the bus
+    // layout doesn't change again (and break saved DAW routings) later.
+    bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return true; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }

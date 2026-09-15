@@ -1,9 +1,10 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "HighwayRenderer.h"
+#include "QuickBindPanel.h"
 
-// 3D highway underneath (OpenGL); HUD, settings panel (device + mapping table)
-// and help overlay composited on top.
+// 3D highway underneath (OpenGL); HUD, settings panel (device + QuickBind
+// diagram / mapping table) and help overlay composited on top.
 class GHMidiEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
@@ -19,10 +20,13 @@ private:
     void updateHudButtons();
     void refreshDeviceBox();
     void refreshMappingRows();
+    void updateBindModeVisibility();  // QuickBind diagram vs. row table
+    void refreshMidiOutBox();
 
     GHMidiProcessor& proc;
     HighwayRenderer highway;
     juce::OpenGLContext context;
+    QuickBindPanel quickBind;
 
     bool panelOpen = false, helpOpen = false;
 
@@ -42,8 +46,19 @@ private:
     juce::ComboBox deviceBox;
     juce::TextButton rescanBtn { "RESCAN" }, closeBtn { "X" };
     juce::ToggleButton vmidiToggle { "Virtual MIDI output (record notes in your DAW)" };
+
+    // QuickBind diagram (default) vs. the generic per-row table
+    bool quickBindMode = true;
+    juce::TextButton diagramBtn { "DIAGRAM" }, tableBtn { "TABLE" };
     juce::OwnedArray<juce::Label> rowNames, rowDescs;
     juce::OwnedArray<juce::TextButton> rowLearn, rowClear;
+
+    // Windows (or anywhere else with no OS-level virtual MIDI port): pick a
+    // real output instead, e.g. a loopMIDI port. Hidden when
+    // GuitarService::hasVirtualPort is true (macOS/Linux, normally).
+    juce::Label midiOutLabel;
+    juce::ComboBox midiOutBox;
+    juce::Array<juce::MidiDeviceInfo> shownMidiOuts;
 
     // help overlay
     juce::TextButton helpCloseBtn { "X" }, moreBtn { "MORE HELP" };

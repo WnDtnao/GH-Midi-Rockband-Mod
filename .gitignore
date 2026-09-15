@@ -8,3 +8,4 @@ __pycache__/
 guide/guide.html
 guide/.chrome-profile/
 release/*.pdf
+.claude/

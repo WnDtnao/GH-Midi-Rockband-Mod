@@ -1,13 +1,20 @@
-# GH MIDI
+# GH MIDI — Rockband Mod
 
-Turn a Guitar Hero controller into a real MIDI instrument.
+Turn a Guitar Hero controller into a real MIDI instrument — on **macOS,
+Windows, and Linux**.
 
-A VST3 plugin and standalone app (macOS, Apple Silicon + Intel) that reads a
-Guitar Hero controller over USB HID and plays it like an instrument — inside
-your DAW, or as a MIDI controller for anything — with a real-time 3D note
-highway rendered in OpenGL.
+> This is an unofficial mod/fork of **[GH MIDI](https://michaelloya.studio/gh-midi)**
+> by **Michael Loya** (michaelloya.studio). All credit for the original
+> plugin — the HID-to-MIDI engine, the four playing modes, the OpenGL note
+> highway — goes to him; full guide at the link above. This mod adds
+> cross-platform support and new features on top; see
+> [Changes from the original](#changes-from-the-original) below. Same
+> license, AGPL-3.0.
 
-**Full guide:** https://michaelloya.studio/gh-midi
+A VST3 plugin and standalone app that reads a Guitar Hero controller over USB
+HID and plays it like an instrument — inside your DAW, or as a MIDI
+controller for anything — with a real-time 3D note highway rendered in
+OpenGL.
 
 ## Modes
 
@@ -26,18 +33,31 @@ highway rendered in OpenGL.
 Whammy = pitch bend (+ CC20 for knob-linking). Minus cycles modes, plus taps
 through strum speeds, the joystick changes key (left/right) and octave
 (up/down, ±3 octaves in every mode) — and on-screen arrows do all four for
-controllers without a joystick. Any HID controller can be mapped
-from the in-plugin settings (per-control LEARN, live input testing).
+controllers without a joystick.
 
-**No DAW required.** The release also ships a standalone macOS app: while it
-runs, every DAW and synth app on the Mac sees a MIDI input called "GH MIDI"
+## QuickBind
+
+Open **SETTINGS** and you land on the **DIAGRAM** view: a picture of the
+guitar with one clickable button per control. Click a button on the diagram,
+then press (or sweep, for the whammy/joystick) that control on your
+controller — same LEARN engine as before, just click-the-picture instead of
+reading down a text list one row at a time. The old row-by-row **TABLE**
+view is still there next to it (handy for unusual controllers, or as a
+fallback), and both stay in sync with each other.
+
+**No DAW required.** The release also ships a standalone app: while it runs,
+every DAW and synth app on your machine sees a MIDI input called "GH MIDI"
 (Logic, GarageBand, Ableton, FL, Reaper, ...). Run either the app or the
 plugin, not both — only one process can hold the guitar.
 
 The plugin also publishes a virtual MIDI source ("GH MIDI") so DAWs record
-your performance as editable notes.
+your performance as editable notes. On Windows, which has no OS-level
+virtual MIDI port, pick a real MIDI output instead from the new **MIDI out**
+dropdown in SETTINGS — see the Windows build notes below.
 
 ## Building
+
+### macOS
 
 Requirements: macOS, CMake ≥ 3.24, Xcode command line tools. JUCE 8 and
 hidapi are fetched automatically.
@@ -52,24 +72,114 @@ The VST3 installs to `~/Library/Audio/Plug-Ins/VST3` after a successful
 build. A Standalone app is also built; run it with `GHMIDI_DEMO=1` for a
 self-playing demo (no controller needed).
 
+### Windows
+
+Requirements: CMake ≥ 3.24 and Visual Studio 2022 (or the standalone
+[Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022))
+with the "Desktop development with C++" workload. JUCE 8 and hidapi are
+fetched automatically.
+
+**MinGW-w64 does not work here** — JUCE 8 has dropped MinGW support outright
+and fails to compile (`juce_gui_basics`'s Windows accessibility code needs
+UI-Automation declarations MinGW's headers don't have). MSVC is the only
+Windows compiler this actually builds with.
+
+```
+cd plugin
+cmake -B build
+cmake --build build --config Release
+```
+
+(add `-G Ninja` before `cmake --build` if you'd rather use Ninja than MSBuild
+— either works with MSVC, just not with MinGW)
+
+The VST3 and the Standalone `.exe` land under
+`build/GHMidi_artefacts/Release/`. Copy the VST3 to your DAW's VST3 folder
+(typically `C:\Program Files\Common Files\VST3`) if it isn't copied there
+automatically.
+
+Windows has no OS-level virtual MIDI port (the original author's own porting
+note, still true), so the Standalone app can't broadcast notes system-wide
+the way it does on macOS/Linux out of the box. If you want that, install
+[loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html), create a
+port, and pick it from the **MIDI out** dropdown in SETTINGS — this doesn't
+matter at all for the VST3 inside a DAW, which routes its MIDI output
+normally regardless of platform.
+
+### Linux
+
+Requirements: CMake ≥ 3.24, a C++17 compiler, Ninja (or Make), and the
+packages JUCE and hidapi need to build against (Debian/Ubuntu names; adjust
+for your distro):
+
+```
+sudo apt install libasound2-dev libfreetype-dev libfontconfig1-dev \
+    libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+    libxinerama-dev libxrandr-dev libxrender-dev libglu1-mesa-dev \
+    mesa-common-dev libudev-dev
+```
+
+```
+cd plugin
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+Then install the udev rule so hidapi can open the controller as a normal
+user (without it, `hid_open()` fails silently unless you run as root):
+
+```
+sudo cp ../linux/99-ghmidi.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Log out/in (or just replug the controller) afterwards for group membership
+to take effect. The VST3 typically goes in `~/.vst3/`.
+
+## Changes from the original
+
+- **Cross-platform**: builds and runs on Windows and Linux, in addition to
+  the original's macOS.
+- **QuickBind**: click-the-picture control mapping (above).
+- Own product identity ("GH MIDI Rockband Mod", its own VST3 plugin/bundle
+  ID) so this can be installed side by side with the original GH MIDI
+  without a naming or plugin-ID clash. Settings are also stored separately,
+  so the two never overwrite each other's mappings.
+- Windows real-MIDI-output fallback (the **MIDI out** picker) since Windows
+  has no virtual MIDI ports — the original author's own README already
+  flagged this gap; this fork fills it with a loopMIDI-compatible picker
+  rather than requiring a bundled driver.
+
+**Planned, not in this build yet:** standard Rock Band guitar support
+(upper frets + tilt sensor, for a wider playable range than Guitar Hero's
+5 frets), pedal-as-controller support (MIDI/HID footswitches for fast
+mode/tone switching), and a pedal-controlled audio effects chain.
+
+Modified under AGPL-3.0 §5(a) ("you must cause the modified files to carry
+prominent notices stating that you changed the files"); files substantially
+changed for this fork carry a short header notice pointing back here.
+
 ## Porting
 
-The engine (`plugin/src/PluginProcessor.cpp`) is plain JUCE + hidapi and
-should port to Windows/Linux with modest effort. Known Windows notes: the
-virtual MIDI source needs a helper like loopMIDI (Windows has no built-in
-virtual MIDI ports), and XInput-only controllers (Xbox 360 era) would need
-an additional input backend beyond hidapi. PRs welcome.
+Windows and Linux support (this fork's main addition) builds on the
+portability the original engine (`plugin/src/PluginProcessor.cpp`) already
+had going for it — plain JUCE + hidapi, no macOS-only APIs in the actual
+HID-reading/MIDI logic. The parts that needed real platform-specific work:
+the build (`plugin/CMakeLists.txt`, now guarding macOS-only settings behind
+`if(APPLE)`), and the virtual-MIDI-port gap on Windows (see above).
+Xbox-360-era XInput-only controllers still aren't supported (would need an
+input backend beyond hidapi) — PRs welcome, same as upstream.
 
-`tools/` scripts from the prototyping era (Python HID dump / mapper /
-MIDI bridge) are kept for adapter debugging.
+`tools/` scripts from the prototyping era (Python HID dump / mapper / MIDI
+bridge) are kept for adapter debugging.
 
 ## Made with Claude Code
 
-The plugin, the README and the user guide were made with Claude Code. Some
-details may be inaccurate; the code is the reference.
+The original plugin, README and user guide were made with Claude Code; so
+is this fork. Some details may be inaccurate; the code is the reference.
 
 ## License
 
-AGPL-3.0 (JUCE is used under its AGPLv3 option). The bundled Metal Mania
-font is by Open Window under the SIL Open Font License — see
-`plugin/assets/OFL-MetalMania.txt`.
+AGPL-3.0 (JUCE is used under its AGPLv3 option), same as the original. The
+bundled Metal Mania font is by Open Window under the SIL Open Font License —
+see `plugin/assets/OFL-MetalMania.txt`.

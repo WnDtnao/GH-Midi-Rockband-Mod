@@ -1,27 +1,25 @@
+// Rockband Mod (2026) -- modified from the original GH MIDI by Michael Loya
+// (michaelloya.studio), AGPL-3.0. See README.md for the full credit / changes
+// note (AGPL-3.0 §5a). This file adds: a DIAGRAM/TABLE toggle wiring in the
+// QuickBind panel, and a MIDI-output picker for platforms with no virtual
+// MIDI port (Windows).
 #include "PluginEditor.h"
+#include "Theme.h"
 #include <BinaryData.h>
 #include <cstdlib>
 
 namespace {
-const juce::Colour gemColours[5] = {
-    juce::Colour(0xff33cc3d), juce::Colour(0xffe63232), juce::Colour(0xfff2d02a),
-    juce::Colour(0xff3378e6), juce::Colour(0xfff2921f),
-};
-const juce::Colour openBarColour(0xffa05ff0);
-const juce::Colour gold(0xfff2d02a);
+// gemColours / openBarColour / gold / ghTypeface / ghFont now live in
+// Theme.h so QuickBindPanel.cpp shares them without drift; brought in here
+// unqualified so every existing call site below is unchanged.
+using Theme::gemColours;
+using Theme::openBarColour;
+using Theme::gold;
+using Theme::ghTypeface;
+using Theme::ghFont;
+
 const char* modeNames[4] = { "CHORDS", "NOTES", "SOLO", "CHART" };
 const char* keyNames[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
-
-juce::Typeface::Ptr ghTypeface()
-{
-    static juce::Typeface::Ptr t = juce::Typeface::createSystemTypefaceFor(
-        BinaryData::MetalManiaRegular_ttf, (size_t) BinaryData::MetalManiaRegular_ttfSize);
-    return t;
-}
-juce::Font ghFont(float h)
-{
-    return juce::Font(juce::FontOptions(ghTypeface()).withHeight(h));
-}
 
 const juce::String arrowL(juce::CharPointer_UTF8("\xE2\x97\x80"));   // left-pointing triangle
 const juce::String arrowR(juce::CharPointer_UTF8("\xE2\x96\xB6"));   // right-pointing triangle
@@ -31,7 +29,10 @@ const juce::String arrowNE(juce::CharPointer_UTF8("\xE2\x86\x97"));  // north-ea
 
 juce::Rectangle<int> panelBounds(int W, int H)
 {
-    return { W / 2 - 250, H / 2 - 240, 500, 480 };
+    // +40 tall vs. the original 500x480: room for the QuickBind DIAGRAM/TABLE
+    // toggle row and the Windows real-MIDI-output row, without touching the
+    // 12-row mapping table's own layout
+    return { W / 2 - 250, H / 2 - 260, 500, 520 };
 }
 juce::Rectangle<int> helpBounds(int W, int H)
 {
@@ -46,7 +47,7 @@ juce::Rectangle<int> hudPlate(int W, int H)
 } // namespace
 
 GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
-    : AudioProcessorEditor(p), proc(p), highway(p, *this)
+    : AudioProcessorEditor(p), proc(p), highway(p, *this), quickBind(p)
 {
     setOpaque(true);
     highway.setContext(&context);
@@ -150,6 +151,36 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
         clear->onClick = [this, t] { proc.guitar().clearMapping(t); };
     }
 
+    // QuickBind diagram (default) vs. the row table above, a radio pair like
+    // the FRET/STRUM sustain selector
+    addChildComponent(quickBind);
+    for (auto* b : { &diagramBtn, &tableBtn })
+    {
+        addChildComponent(*b);
+        b->setWantsKeyboardFocus(false);
+        b->setClickingTogglesState(true);
+        b->setRadioGroupId(1002);
+        b->setColour(juce::TextButton::buttonOnColourId, gold);
+        b->setColour(juce::TextButton::textColourOnId, juce::Colour(0xff15151f));
+    }
+    diagramBtn.setConnectedEdges(juce::Button::ConnectedOnRight);
+    tableBtn.setConnectedEdges(juce::Button::ConnectedOnLeft);
+    diagramBtn.setToggleState(true, juce::dontSendNotification);
+    diagramBtn.onClick = [this] { quickBindMode = true;  updateBindModeVisibility(); repaint(); };
+    tableBtn.onClick   = [this] { quickBindMode = false; updateBindModeVisibility(); repaint(); };
+
+    // Windows (or anywhere with no OS-level virtual MIDI port): pick a real
+    // output to send to instead, e.g. a loopMIDI port
+    initLabel(midiOutLabel, "MIDI out");
+    addChildComponent(midiOutBox);
+    midiOutBox.setTextWhenNothingSelected("(pick a MIDI output)");
+    midiOutBox.onChange = [this]
+    {
+        const int idx = midiOutBox.getSelectedId() - 1;
+        if (idx >= 0 && idx < shownMidiOuts.size())
+            proc.guitar().selectMidiOutput(shownMidiOuts[idx].identifier);
+    };
+
     addChildComponent(vmidiToggle);
     vmidiToggle.onClick = [this]
     {
@@ -207,25 +238,40 @@ void GHMidiEditor::setPanelVisible(bool visible)
         c->setVisible(! visible && ! helpOpen);
     for (auto* c : std::initializer_list<juce::Component*> {
              &deviceLabel, &deviceBox, &rescanBtn, &vmidiToggle,
-             &closeBtn, &learnHint })
+             &closeBtn, &diagramBtn, &tableBtn })
         c->setVisible(visible);
-    for (int t = 0; t < rowNames.size(); ++t)
-    {
-        rowNames[t]->setVisible(visible);
-        rowDescs[t]->setVisible(visible);
-        rowLearn[t]->setVisible(visible);
-        rowClear[t]->setVisible(visible);
-    }
+    // Windows (or anywhere else a virtual MIDI port couldn't be created):
+    // show the real-output picker. Runtime check, not #ifdef.
+    const bool showMidiOut = visible && ! proc.guitar().hasVirtualPort.load();
+    midiOutLabel.setVisible(showMidiOut);
+    midiOutBox.setVisible(showMidiOut);
+    updateBindModeVisibility();
     if (visible)
     {
         proc.guitar().requestDeviceScan();
         vmidiToggle.setToggleState(proc.guitar().virtualMidiOn.load(), juce::dontSendNotification);
         refreshMappingRows();
+        if (showMidiOut)
+            refreshMidiOutBox();
     }
     else
         proc.guitar().cancelLearn();
     updateHudButtons();
     repaint();
+}
+
+void GHMidiEditor::updateBindModeVisibility()
+{
+    quickBind.setVisible(panelOpen && quickBindMode);
+    const bool showRow = panelOpen && ! quickBindMode;
+    learnHint.setVisible(showRow);   // QuickBind draws its own equivalent hint
+    for (int t = 0; t < rowNames.size(); ++t)
+    {
+        rowNames[t]->setVisible(showRow);
+        rowDescs[t]->setVisible(showRow);
+        rowLearn[t]->setVisible(showRow);
+        rowClear[t]->setVisible(showRow);
+    }
 }
 
 void GHMidiEditor::syncSustainButtons()
@@ -280,6 +326,22 @@ void GHMidiEditor::refreshDeviceBox()
     }
     if (selected > 0)
         deviceBox.setSelectedId(selected, juce::dontSendNotification);
+}
+
+void GHMidiEditor::refreshMidiOutBox()
+{
+    shownMidiOuts = proc.guitar().getMidiOutputs();
+    midiOutBox.clear(juce::dontSendNotification);
+    const auto currentId = proc.guitar().currentMidiOutId();
+    int selected = 0;
+    for (int i = 0; i < shownMidiOuts.size(); ++i)
+    {
+        midiOutBox.addItem(shownMidiOuts[i].name, i + 1);
+        if (shownMidiOuts[i].identifier == currentId)
+            selected = i + 1;
+    }
+    if (selected > 0)
+        midiOutBox.setSelectedId(selected, juce::dontSendNotification);
 }
 
 void GHMidiEditor::refreshMappingRows()
@@ -393,20 +455,38 @@ void GHMidiEditor::resized()
     devRow.removeFromRight(6);
     deviceBox.setBounds(devRow);
     r.removeFromTop(10);
+    // DIAGRAM/TABLE toggle, right-aligned
+    {
+        auto toggleRow = r.removeFromTop(24);
+        auto toggleGroup = toggleRow.removeFromRight(168);
+        diagramBtn.setBounds(toggleGroup.removeFromLeft(84).reduced(1, 0));
+        tableBtn.setBounds(toggleGroup.reduced(1, 0));
+    }
+    r.removeFromTop(6);
     learnHint.setBounds(r.removeFromTop(18));
     r.removeFromTop(4);
+    // QuickBind's diagram and the row table share this same region -- only
+    // one is visible at a time (see updateBindModeVisibility())
+    auto bindArea = r.removeFromTop(rowNames.size() * 24);
+    quickBind.setBounds(bindArea);
     for (int t = 0; t < rowNames.size(); ++t)
     {
-        auto row = r.removeFromTop(22);
+        auto row = bindArea.removeFromTop(22);
         rowNames[t]->setBounds(row.removeFromLeft(136));
         rowClear[t]->setBounds(row.removeFromRight(30).reduced(0, 1));
         row.removeFromRight(4);
         rowLearn[t]->setBounds(row.removeFromRight(62).reduced(0, 1));
         rowDescs[t]->setBounds(row);
-        r.removeFromTop(2);
+        bindArea.removeFromTop(2);
     }
     r.removeFromTop(8);
     vmidiToggle.setBounds(r.removeFromTop(24));
+    r.removeFromTop(6);
+    {
+        auto midiRow = r.removeFromTop(24);
+        midiOutLabel.setBounds(midiRow.removeFromLeft(76));
+        midiOutBox.setBounds(midiRow);
+    }
 
     // help overlay
     auto hb = helpBounds(getWidth(), getHeight());
@@ -549,7 +629,7 @@ void GHMidiEditor::paint(juce::Graphics& g)
                    (int) pb.getWidth() - 40, 26, juce::Justification::left);
         g.setColour(juce::Colours::white.withAlpha(0.35f));
         g.setFont(juce::Font(juce::FontOptions(11.0f)));
-        g.drawText("v1.1", (int) pb.getX() + 20, (int) pb.getBottom() - 30,
+        g.drawText("Rockband Mod v2.0", (int) pb.getX() + 20, (int) pb.getBottom() - 30,
                    (int) pb.getWidth() - 40, 16, juce::Justification::right);
     };
 

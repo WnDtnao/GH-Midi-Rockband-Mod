@@ -1,0 +1,18 @@
+# GH MIDI Rockband Mod -- udev rule for non-root HID access on Linux.
+#
+# Without this, hidapi's hid_open() silently fails for a normal (non-root)
+# user on most distros: /dev/hidrawN nodes aren't user-writable by default.
+# This grants access to any HID gamepad/joystick-class device (which is how
+# Guitar Hero / Rock Band USB guitars and most USB pedals enumerate) to
+# members of the "plugdev" group, and also tags it for the modern
+# uaccess/logind mechanism some distros use instead.
+#
+# Install:
+#   sudo cp linux/99-ghmidi.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   (log out/in, or replug the controller, so group membership takes effect)
+#
+# If you're not already in the "plugdev" group:
+#   sudo usermod -aG plugdev "$USER"
+
+SUBSYSTEM=="hidraw", ATTRS{bInterfaceClass}=="03", MODE="0660", GROUP="plugdev", TAG+="uaccess"
