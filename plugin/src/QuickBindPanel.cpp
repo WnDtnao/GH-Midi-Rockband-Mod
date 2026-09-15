@@ -171,8 +171,8 @@ void QuickBindPanel::paint(juce::Graphics& g)
 
     juce::String hint;
     if (learnTarget >= 0)
-        hint = (learnTarget >= GuitarService::LWhammy ? juce::String("Now SWEEP the ")
-                                                        : juce::String("Now PRESS the "))
+        hint = (GuitarService::isAxisTarget(learnTarget) ? juce::String("Now SWEEP the ")
+                                                           : juce::String("Now PRESS the "))
              + GuitarService::targetName(learnTarget);
     else
         hint = "Click a button on the diagram, then press it on your guitar.";

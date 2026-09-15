@@ -1,8 +1,10 @@
 // Rockband Mod (2026) -- modified from the original GH MIDI by Michael Loya
 // (michaelloya.studio), AGPL-3.0. See README.md for the full credit / changes
 // note (AGPL-3.0 §5a). This file adds: a real-MIDI-output fallback for
-// platforms with no virtual MIDI port (Windows), and MIDI input acceptance
-// for the upcoming pedal support.
+// platforms with no virtual MIDI port (Windows), Rock Band upper-fret/tilt
+// support, and pedal-as-controller support (a second HID device polled
+// alongside the guitar, and/or an incoming MIDI note/CC) that fires
+// performance actions (mode/key/octave/sustain) instead of playing notes.
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <hidapi.h>
@@ -11,11 +13,13 @@
 //
 // hidapi/macOS rule (learned the hard way): ALL hidapi calls live on this
 // service's single thread, and that thread does its own teardown before dying.
+// The pedal's HID device is polled on this SAME thread for the same reason
+// (see pollPedal(), called from run()); it is not given its own thread.
 //
 // v1.0: controls are read through a ControllerMap (learned via the in-plugin
 // calibration wizard and persisted to Application Support), so any HID
 // controller can drive the instrument — not just the raphnet WUSBMote.
-class GuitarService : private juce::Thread
+class GuitarService : private juce::Thread, private juce::MidiInputCallback
 {
 public:
     enum Mode { Easy = 0, Real = 1, Penta = 2, Chart = 3 };
@@ -49,6 +53,22 @@ public:
         // unmapped (invalid()) for GH guitars.
         ButtonMap upperFrets[5];
         ButtonMap tilt;
+    };
+
+    // Pedal-as-controller: a HID footswitch board fires these 7 actions by
+    // button, in place of playing notes. A separate MIDI input can fire the
+    // same 7 actions by note-on or CC (see MidiPedalMap) -- independent of
+    // whether a HID pedal is also mapped.
+    struct PedalMap
+    {
+        ButtonMap modeFwd, modeBack, keyUp, keyDown, octUp, octDown, sustain;
+    };
+    struct MidiPedalMap
+    {
+        // -1 = unmapped. 0..127 = that note number (any channel, any note-on);
+        // 1000+cc = that CC number (any channel, value >= 64), same order as
+        // PedalMap's 7 actions.
+        int trig[7] = { -1, -1, -1, -1, -1, -1, -1 };
     };
 
     struct DeviceInfo
@@ -132,11 +152,49 @@ public:
     int currentVid() const { return targetVid.load(); }
     int currentPid() const { return targetPid.load(); }
 
+    // ---- pedal: a second, optional HID device, sharing the same device
+    // list as the guitar (see getDevices()/requestDeviceScan() above) ----
+    void selectPedalDevice(int vid, int pid)
+    {
+        targetPedalVid = vid;
+        targetPedalPid = pid;
+        pedalReconnectRequest = true;
+        saveRequest = true;
+        notify();
+    }
+    int currentPedalVid() const { return targetPedalVid.load(); }
+    int currentPedalPid() const { return targetPedalPid.load(); }
+    std::atomic<bool> pedalFound { false };
+
+    // ---- pedal: an optional MIDI input, independent of the HID pedal ----
+    juce::Array<juce::MidiDeviceInfo> getMidiInputs() const { return juce::MidiInput::getAvailableDevices(); }
+    juce::String currentMidiInId() const { const juce::ScopedLock sl(midiInLock); return midiInId; }
+    void selectMidiInput(const juce::String& identifier)
+    {
+        { const juce::ScopedLock sl(midiInLock); midiInId = identifier; }
+        midiInRequest = true;
+        saveRequest = true;
+        notify();
+    }
+    // called from processBlock() (VST3: MIDI arrives via the host's routing,
+    // not a system MIDI input device) -- safe from the audio thread, same as
+    // handleIncomingMidiMessage() below is safe from JUCE's MIDI thread: both
+    // only ever touch mapLock (briefly) and the existing cross-thread-safe
+    // nudge*/request* methods, never guitar-thread-only state directly.
+    void handleMidiPedalMessage(const juce::MidiMessage& message);
+    void requestSustainToggle() { sustainToggleRequest = true; notify(); }
+
     // per-control mapping: each row learned or cleared independently
     enum LearnTarget { LFretG = 0, LFretR, LFretY, LFretB, LFretO,
                        LStrumDown, LStrumUp, LPlus, LMinus, LWhammy, LStickX, LStickY,
                        // Rock Band standard guitars only -- see ControllerMap
                        LFretUpG, LFretUpR, LFretUpY, LFretUpB, LFretUpO, LTilt,
+                       // pedal-as-controller: HID footswitch (see PedalMap)...
+                       LPedalModeFwd, LPedalModeBack, LPedalKeyUp, LPedalKeyDown,
+                       LPedalOctUp, LPedalOctDown, LPedalSustain,
+                       // ...and/or MIDI note/CC (see MidiPedalMap), same 7 actions
+                       LMidiPedalModeFwd, LMidiPedalModeBack, LMidiPedalKeyUp, LMidiPedalKeyDown,
+                       LMidiPedalOctUp, LMidiPedalOctDown, LMidiPedalSustain,
                        LTargetCount };
     void startLearn(int target) { learnTarget = juce::jlimit(0, LTargetCount - 1, target); learnPhase = 0; learnT0req = true; notify(); }
     void cancelLearn() { learnTarget = -1; }
@@ -145,6 +203,14 @@ public:
     void clearMapping(int target);
     juce::String describeMapping(int target) const;
     static juce::String targetName(int target);
+    // true for the 3 targets learned by sweeping an axis (whammy, joystick
+    // X/Y) rather than pressing a button -- everything else is a button,
+    // including every target added after these three (Rock Band, pedals).
+    // A range check on LWhammy alone (as this used to be, before Rock Band
+    // and pedal targets were added after LStickY) silently mis-scoped once
+    // those were added; centralised here instead of inlined per-UI-file so
+    // it can't drift out of sync like that again.
+    static bool isAxisTarget(int target) { return target == LWhammy || target == LStickX || target == LStickY; }
 
     void requestSave() { saveRequest = true; notify(); }
 
@@ -180,6 +246,15 @@ private:
     juce::String deviceKey() const;
     static juce::File settingsFile();
 
+    // pedal (guitar thread only, except handleIncomingMidiMessage/
+    // handleMidiPedalMessage -- see the comment on those above)
+    void pollPedal();               // called every run() tick, independent of guitar state
+    void pedalStep(const uint8_t* d, int len);
+    void pedalLearnTick(const uint8_t* d, int len, double now);
+    void applyMidiInput();
+    void fireAction(int actionIdx);   // 0..6, same order as PedalMap/MidiPedalMap
+    void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage&) override;
+
     bool demoMode = false;
     void sendMsg(const juce::MidiMessage& m);
     void noteOn(int note, int vel);
@@ -205,6 +280,21 @@ private:
     juce::var controllersVar;   // per-device saved mappings (guitar thread only)
     std::atomic<int> mapVersion { 0 };
     std::atomic<int> targetVid { 0x289B }, targetPid { 0x0080 };
+
+    // ---- pedal: HID (guarded by mapLock like map above) ----
+    PedalMap pedalMap;
+    std::atomic<int> targetPedalVid { 0 }, targetPedalPid { 0 };   // 0 = no pedal selected
+    std::atomic<bool> pedalReconnectRequest { false };
+    hid_device* pedalDev = nullptr;
+    bool pedalPrevHeld[7] { false, false, false, false, false, false, false };
+
+    // ---- pedal: MIDI (guarded by mapLock like map above) ----
+    MidiPedalMap midiPedalMap;
+    std::unique_ptr<juce::MidiInput> midiIn;   // created/destroyed on the guitar thread
+    mutable juce::CriticalSection midiInLock;
+    juce::String midiInId;
+    std::atomic<bool> midiInRequest { false };
+    std::atomic<bool> sustainToggleRequest { false };
 
     // device list (guitar thread writes, UI reads)
     mutable juce::CriticalSection deviceLock;
@@ -275,9 +365,10 @@ public:
 
     const juce::String getName() const override { return "GH MIDI"; }
     // true: reserves a MIDI input bus for the pedal-as-MIDI-controller path
-    // (Rockband Mod). Nothing reads it yet -- processBlock() still clears the
-    // incoming buffer -- until pedal support lands; declared now so the bus
-    // layout doesn't change again (and break saved DAW routings) later.
+    // (Rockband Mod) -- processBlock() feeds it to
+    // GuitarService::handleMidiPedalMessage(). On Standalone, a real MIDI
+    // input device works too (GuitarService::selectMidiInput()); a VST3
+    // hosted in a DAW gets pedal MIDI through this bus instead.
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return true; }
     bool isMidiEffect() const override { return false; }

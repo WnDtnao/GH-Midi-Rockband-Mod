@@ -22,6 +22,8 @@ private:
     void refreshMappingRows();
     void updateBindModeVisibility();  // QuickBind diagram vs. row table
     void refreshMidiOutBox();
+    void refreshPedalBox();
+    void refreshMidiInBox();
 
     GHMidiProcessor& proc;
     HighwayRenderer highway;
@@ -63,6 +65,13 @@ private:
     juce::Label midiOutLabel;
     juce::ComboBox midiOutBox;
     juce::Array<juce::MidiDeviceInfo> shownMidiOuts;
+
+    // pedal-as-controller: a second HID device (shares shownDevices/RESCAN
+    // with the guitar above) and/or a MIDI input, each independently
+    // optional. Both offer "(none)" at id 1, real devices after.
+    juce::Label pedalLabel, midiInLabel;
+    juce::ComboBox pedalBox, midiInBox;
+    juce::Array<juce::MidiDeviceInfo> shownMidiIns;
 
     // help overlay
     juce::TextButton helpCloseBtn { "X" }, moreBtn { "MORE HELP" };

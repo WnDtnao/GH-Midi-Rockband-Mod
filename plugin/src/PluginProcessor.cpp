@@ -162,6 +162,48 @@ static juce::var mapToVar(const GuitarService::ControllerMap& m)
     return juce::var(o);
 }
 
+static void varToPedalMap(const juce::var& v, GuitarService::PedalMap& m)
+{
+    auto btn = [&](const char* k, GuitarService::ButtonMap& b)
+    {
+        if (auto* a = v[k].getArray(); a != nullptr && a->size() >= 2)
+            b = { (int) (*a)[0], (uint8_t) (int) (*a)[1] };
+    };
+    btn("modeFwd", m.modeFwd); btn("modeBack", m.modeBack);
+    btn("keyUp", m.keyUp); btn("keyDown", m.keyDown);
+    btn("octUp", m.octUp); btn("octDown", m.octDown);
+    btn("sustain", m.sustain);
+}
+
+static juce::var pedalMapToVar(const GuitarService::PedalMap& m)
+{
+    auto* o = new juce::DynamicObject();
+    auto btn = [&](const char* k, const GuitarService::ButtonMap& b)
+    {
+        o->setProperty(k, juce::Array<juce::var> { b.byteIdx, (int) b.mask });
+    };
+    btn("modeFwd", m.modeFwd); btn("modeBack", m.modeBack);
+    btn("keyUp", m.keyUp); btn("keyDown", m.keyDown);
+    btn("octUp", m.octUp); btn("octDown", m.octDown);
+    btn("sustain", m.sustain);
+    return juce::var(o);
+}
+
+static void varToMidiPedalMap(const juce::var& v, GuitarService::MidiPedalMap& m)
+{
+    if (auto* a = v.getArray())
+        for (int i = 0; i < 7 && i < a->size(); ++i)
+            m.trig[i] = (int) (*a)[i];
+}
+
+static juce::var midiPedalMapToVar(const GuitarService::MidiPedalMap& m)
+{
+    juce::Array<juce::var> a;
+    for (int i = 0; i < 7; ++i)
+        a.add(m.trig[i]);
+    return a;
+}
+
 juce::String GuitarService::deviceKey() const
 {
     return "dev_" + juce::String::toHexString(targetVid.load())
@@ -196,6 +238,25 @@ void GuitarService::applyMidiOutput()
         realMidiOut = juce::MidiOutput::openDevice(id);
 }
 
+void GuitarService::applyMidiInput()
+{
+    // Standalone only: a hosted VST3 gets pedal MIDI through the host's own
+    // routing into processBlock() -> handleMidiPedalMessage() instead, and
+    // must not also grab a system MIDI input for itself -- a well-behaved
+    // plugin doesn't seize system devices out from under its host.
+    midiIn.reset();
+    if (! juce::JUCEApplicationBase::isStandaloneApp())
+        return;
+    juce::String id;
+    { const juce::ScopedLock sl(midiInLock); id = midiInId; }
+    if (id.isNotEmpty())
+    {
+        midiIn = juce::MidiInput::openDevice(id, this);
+        if (midiIn != nullptr)
+            midiIn->start();
+    }
+}
+
 void GuitarService::loadSettings()
 {
     const auto v = juce::JSON::parse(settingsFile());
@@ -221,6 +282,14 @@ void GuitarService::loadSettings()
             controllersVar.getDynamicObject()->setProperty(juce::Identifier(deviceKey()),
                                                            mapToVar(tmp));
         }
+        // pedal (HID + MIDI) -- absent in older settings files, which leaves
+        // both unmapped rather than failing to load
+        targetPedalVid = get("pedalVid", 0);
+        targetPedalPid = get("pedalPid", 0);
+        midiInId = v["midiInId"].toString();
+        if (v["pedal"].isObject())
+            varToPedalMap(v["pedal"], pedalMap);
+        varToMidiPedalMap(v["midiPedal"], midiPedalMap);
     }
     applyMapForDevice();
 }
@@ -246,6 +315,15 @@ void GuitarService::saveSettings()
     o->setProperty("strumRoll", strumRollMs.load());
     o->setProperty("midiOutId", currentMidiOutId());
     o->setProperty("controllers", controllersVar);
+    o->setProperty("pedalVid", targetPedalVid.load());
+    o->setProperty("pedalPid", targetPedalPid.load());
+    o->setProperty("midiInId", currentMidiInId());
+    {
+        PedalMap pmSnap; MidiPedalMap mpmSnap;
+        { const juce::ScopedLock sl(mapLock); pmSnap = pedalMap; mpmSnap = midiPedalMap; }
+        o->setProperty("pedal", pedalMapToVar(pmSnap));
+        o->setProperty("midiPedal", midiPedalMapToVar(mpmSnap));
+    }
 
     auto f = settingsFile();
     f.getParentDirectory().createDirectory();
@@ -260,8 +338,12 @@ void GuitarService::scanDevices()
     {
         for (auto* i = list; i != nullptr; i = i->next)
         {
-            const bool gamepad = i->usage_page == 1 && (i->usage == 4 || i->usage == 5);
-            if (! gamepad)
+            // usage 4/5 = joystick/gamepad (guitars); usage 6 = keyboard --
+            // many cheap USB pedals identify as keyboard-class HID
+            // specifically so they need no drivers. Not restricted further:
+            // both the guitar and pedal device pickers draw from this same list.
+            const bool relevant = i->usage_page == 1 && (i->usage == 4 || i->usage == 5 || i->usage == 6);
+            if (! relevant)
                 continue;
             DeviceInfo d;
             d.vid = i->vendor_id;
@@ -440,6 +522,7 @@ void GuitarService::run()
     hasVirtualPort = false;
    #endif
     applyMidiOutput();  // apply any previously-saved real-output pick
+    applyMidiInput();   // apply any previously-saved MIDI pedal input pick (Standalone only -- see applyMidiInput())
 
     while (! threadShouldExit())
     {
@@ -459,6 +542,13 @@ void GuitarService::run()
             scanDevices();
         if (midiOutRequest.exchange(false))
             applyMidiOutput();
+        if (midiInRequest.exchange(false))
+            applyMidiInput();
+        if (sustainToggleRequest.exchange(false))
+        {
+            strumSustain = ! strumSustain.load();
+            requestSave();
+        }
         if (reconnectRequest.exchange(false))
         {
             if (dev != nullptr)
@@ -470,6 +560,11 @@ void GuitarService::run()
             }
             applyMapForDevice();   // each controller keeps its own setup
         }
+
+        // pedal: independent of guitar connection state, so this runs
+        // unconditionally here, before any of the guitar's own `continue`s
+        // below could skip it
+        pollPedal();
 
         if (dev == nullptr)
         {
@@ -553,7 +648,8 @@ void GuitarService::run()
             learnByte = -1;
             learnT0 = now;
         }
-        if (learnTarget.load() >= 0)
+        const int lt = learnTarget.load();
+        if (lt >= 0 && lt < LPedalModeFwd)
             learnTick(buf, got, now);
         else
             step(buf, got);
@@ -562,10 +658,16 @@ void GuitarService::run()
     allOff();
     virtualOut.reset();
     realMidiOut.reset();
+    midiIn.reset();
     if (dev != nullptr)
     {
         hid_close(dev);
         dev = nullptr;
+    }
+    if (pedalDev != nullptr)
+    {
+        hid_close(pedalDev);
+        pedalDev = nullptr;
     }
     hid_exit();  // on this thread, while its run loop still exists
 }
@@ -577,7 +679,13 @@ juce::String GuitarService::targetName(int t)
                                    "ORANGE FRET", "STRUM DOWN", "STRUM UP", "PLUS BUTTON",
                                    "MINUS BUTTON", "WHAMMY", "JOYSTICK LEFT/RIGHT", "JOYSTICK UP/DOWN",
                                    "UPPER GREEN FRET", "UPPER RED FRET", "UPPER YELLOW FRET",
-                                   "UPPER BLUE FRET", "UPPER ORANGE FRET", "TILT SENSOR" };
+                                   "UPPER BLUE FRET", "UPPER ORANGE FRET", "TILT SENSOR",
+                                   "PEDAL: NEXT MODE", "PEDAL: PREV MODE", "PEDAL: KEY UP", "PEDAL: KEY DOWN",
+                                   "PEDAL: OCTAVE UP", "PEDAL: OCTAVE DOWN", "PEDAL: SUSTAIN TOGGLE",
+                                   "MIDI PEDAL: NEXT MODE", "MIDI PEDAL: PREV MODE",
+                                   "MIDI PEDAL: KEY UP", "MIDI PEDAL: KEY DOWN",
+                                   "MIDI PEDAL: OCTAVE UP", "MIDI PEDAL: OCTAVE DOWN",
+                                   "MIDI PEDAL: SUSTAIN TOGGLE" };
     return t >= 0 && t < LTargetCount ? names[t] : juce::String();
 }
 
@@ -598,9 +706,41 @@ static GuitarService::ButtonMap* buttonSlot(GuitarService::ControllerMap& m, int
     }
 }
 
+static GuitarService::ButtonMap* pedalButtonSlot(GuitarService::PedalMap& m, int t)
+{
+    switch (t)
+    {
+        case GuitarService::LPedalModeFwd: return &m.modeFwd;
+        case GuitarService::LPedalModeBack: return &m.modeBack;
+        case GuitarService::LPedalKeyUp: return &m.keyUp;
+        case GuitarService::LPedalKeyDown: return &m.keyDown;
+        case GuitarService::LPedalOctUp: return &m.octUp;
+        case GuitarService::LPedalOctDown: return &m.octDown;
+        case GuitarService::LPedalSustain: return &m.sustain;
+        default: return nullptr;
+    }
+}
+
 juce::String GuitarService::describeMapping(int t) const
 {
     const juce::ScopedLock sl(mapLock);
+    if (t >= LPedalModeFwd && t < LMidiPedalModeFwd)
+    {
+        auto* b = pedalButtonSlot(const_cast<PedalMap&>(pedalMap), t);
+        if (b == nullptr || ! b->valid())
+            return "-";
+        int bit = 0;
+        for (int i = 0; i < 8; ++i)
+            if (b->mask & (1 << i)) { bit = i; break; }
+        return "pedal byte " + juce::String(b->byteIdx) + " / bit " + juce::String(bit);
+    }
+    if (t >= LMidiPedalModeFwd && t < LTargetCount)
+    {
+        const int trig = midiPedalMap.trig[t - LMidiPedalModeFwd];
+        if (trig < 0)
+            return "-";
+        return trig >= 1000 ? "MIDI CC " + juce::String(trig - 1000) : "MIDI note " + juce::String(trig);
+    }
     auto& mm = const_cast<ControllerMap&> (map);
     if (auto* b = buttonSlot(mm, t))
     {
@@ -624,7 +764,14 @@ void GuitarService::clearMapping(int t)
 {
     {
         const juce::ScopedLock sl(mapLock);
-        if (auto* b = buttonSlot(map, t))
+        if (t >= LPedalModeFwd && t < LMidiPedalModeFwd)
+        {
+            if (auto* b = pedalButtonSlot(pedalMap, t))
+                *b = {};
+        }
+        else if (t >= LMidiPedalModeFwd && t < LTargetCount)
+            midiPedalMap.trig[t - LMidiPedalModeFwd] = -1;
+        else if (auto* b = buttonSlot(map, t))
             *b = {};
         else if (t == LWhammy)
             map.whammy = {};
@@ -641,7 +788,7 @@ void GuitarService::clearMapping(int t)
 void GuitarService::learnTick(const uint8_t* d, int len, double now)
 {
     const int t = learnTarget.load();
-    if (t < 0)
+    if (t < 0 || t >= LPedalModeFwd)   // pedal targets: pedalLearnTick() instead, fed from pollPedal()
         return;
     const int n = juce::jmin(len, 64);
 
@@ -765,6 +912,193 @@ void GuitarService::learnTick(const uint8_t* d, int len, double now)
         saveRequest = true;
         learnTarget = -1;
     }
+}
+
+// ---------- pedal (guitar thread only, except handleIncomingMidiMessage /
+// handleMidiPedalMessage -- see the comment on those in PluginProcessor.h)
+// ----------
+void GuitarService::pollPedal()
+{
+    const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+    const int lt = learnTarget.load();
+    const bool isPedalLearn = lt >= LPedalModeFwd && lt < LMidiPedalModeFwd;
+    // learnT0req is shared with the guitar's own learnTick() reset (run());
+    // only whichever side matches the current learnTarget consumes it, so
+    // exactly one baseline gets armed regardless of which is being learned
+    if (isPedalLearn && learnT0req.exchange(false))
+    {
+        learnPhase = 0;
+        learnByte = -1;
+        learnT0 = now;
+    }
+
+    if (pedalReconnectRequest.exchange(false) && pedalDev != nullptr)
+    {
+        hid_close(pedalDev);
+        pedalDev = nullptr;
+        pedalFound = false;
+    }
+
+    if (pedalDev == nullptr && targetPedalVid.load() != 0)
+    {
+        pedalDev = hid_open((unsigned short) targetPedalVid.load(), (unsigned short) targetPedalPid.load(), nullptr);
+        pedalFound = pedalDev != nullptr;
+        if (pedalDev != nullptr)
+            hid_set_nonblocking(pedalDev, 1);
+    }
+    if (pedalDev == nullptr)
+        return;
+
+    uint8_t buf[64];
+    const int r = hid_read(pedalDev, buf, sizeof(buf));
+    if (r < 0)
+    {
+        hid_close(pedalDev);
+        pedalDev = nullptr;
+        pedalFound = false;
+        return;
+    }
+    if (r < 2)
+        return;   // no new report this tick -- a footswitch doesn't need
+                   // the guitar's every-4ms strum-timing precision
+
+    if (isPedalLearn)
+        pedalLearnTick(buf, r, now);
+    else
+        pedalStep(buf, r);
+}
+
+void GuitarService::pedalStep(const uint8_t* d, int len)
+{
+    PedalMap pm;
+    { const juce::ScopedLock sl(mapLock); pm = pedalMap; }
+    auto pressed = [&](const ButtonMap& b)
+    {
+        return b.valid() && b.byteIdx < len && (d[b.byteIdx] & b.mask) != 0;
+    };
+    const ButtonMap* slots[7] = { &pm.modeFwd, &pm.modeBack, &pm.keyUp, &pm.keyDown,
+                                  &pm.octUp, &pm.octDown, &pm.sustain };
+    for (int i = 0; i < 7; ++i)
+    {
+        const bool held = pressed(*slots[i]);
+        if (held && ! pedalPrevHeld[i])
+            fireAction(i);   // edge-triggered: fires once per press, not per tick held
+        pedalPrevHeld[i] = held;
+    }
+}
+
+// button-learning only (no axis case -- pedals are footswitches, not
+// expression pedals, in this version), otherwise the same algorithm as the
+// button half of learnTick(): settle, baseline, watch for a stable change
+void GuitarService::pedalLearnTick(const uint8_t* d, int len, double now)
+{
+    const int t = learnTarget.load();
+    if (t < LPedalModeFwd || t >= LMidiPedalModeFwd)
+        return;
+    const int n = juce::jmin(len, 64);
+
+    if (learnPhase == 0)
+    {
+        if (now - learnT0 > 0.6)
+        {
+            learnBaseLen = n;
+            std::memcpy(learnBase, d, (size_t) n);
+            learnPhase = 1;
+        }
+        return;
+    }
+    if (now - learnT0 > 12.0)   // nothing happened: give up quietly
+    {
+        learnTarget = -1;
+        return;
+    }
+
+    const int nb = juce::jmin(n, learnBaseLen);
+    if (learnPhase == 1)
+    {
+        for (int i = 0; i < nb; ++i)
+            if (d[i] != learnBase[i])
+            {
+                learnByte = i;
+                learnMask = (uint8_t) (d[i] ^ learnBase[i]);
+                learnChangeAt = now;
+                learnPhase = 2;
+                break;
+            }
+    }
+    else
+    {
+        if (learnByte < len && (uint8_t) (d[learnByte] ^ learnBase[learnByte]) == learnMask)
+        {
+            if (now - learnChangeAt > 0.09)
+            {
+                {
+                    const juce::ScopedLock sl(mapLock);
+                    if (auto* b = pedalButtonSlot(pedalMap, t))
+                        *b = { learnByte, learnMask };
+                }
+                ++mapVersion;
+                saveRequest = true;
+                learnTarget = -1;
+            }
+        }
+        else
+            learnPhase = 1;
+    }
+}
+
+// the 7 pedal actions, shared by the HID pedal (pedalStep, guitar thread)
+// and the MIDI pedal (handleMidiPedalMessage, whatever thread that runs on)
+// -- safe from any thread, since every case below is itself a pre-existing
+// cross-thread-safe call (nudge*/request*), never guitar-thread-only state
+void GuitarService::fireAction(int actionIdx)
+{
+    switch (actionIdx)
+    {
+        case 0: nudgeMode(1); break;
+        case 1: nudgeMode(-1); break;
+        case 2: nudgeKey(1); break;
+        case 3: nudgeKey(-1); break;
+        case 4: nudgeOctave(1); break;
+        case 5: nudgeOctave(-1); break;
+        case 6: requestSustainToggle(); break;
+        default: break;
+    }
+}
+
+void GuitarService::handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage& message)
+{
+    // fires on a JUCE-internal MIDI thread, not the guitar thread -- see the
+    // thread-safety note on handleMidiPedalMessage() in PluginProcessor.h
+    handleMidiPedalMessage(message);
+}
+
+void GuitarService::handleMidiPedalMessage(const juce::MidiMessage& message)
+{
+    int trig = -1;
+    if (message.isNoteOn())
+        trig = message.getNoteNumber();
+    else if (message.isController() && message.getControllerValue() >= 64)
+        trig = 1000 + message.getControllerNumber();
+    else
+        return;
+
+    const int lt = learnTarget.load();
+    if (lt >= LMidiPedalModeFwd && lt < LTargetCount)
+    {
+        { const juce::ScopedLock sl(mapLock); midiPedalMap.trig[lt - LMidiPedalModeFwd] = trig; }
+        ++mapVersion;
+        saveRequest = true;
+        notify();
+        learnTarget = -1;
+        return;
+    }
+
+    MidiPedalMap mp;
+    { const juce::ScopedLock sl(mapLock); mp = midiPedalMap; }
+    for (int i = 0; i < 7; ++i)
+        if (mp.trig[i] == trig)
+            fireAction(i);
 }
 
 // ---------- mode / key / octave (guitar thread only) ----------
@@ -1198,6 +1532,11 @@ void GHMidiProcessor::prepareToPlay(double sampleRate, int)
 void GHMidiProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
     audio.clear();
+    // VST3 pedal-as-MIDI-controller path: the host routes a pedal's MIDI
+    // here instead of GuitarService opening a system MIDI input itself
+    // (which only the Standalone app does -- see GuitarService::applyMidiInput).
+    for (const auto metadata : midi)
+        service->handleMidiPedalMessage(metadata.getMessage());
     midi.clear();
     collector.removeNextBlockOfMessages(midi, audio.getNumSamples());
 }

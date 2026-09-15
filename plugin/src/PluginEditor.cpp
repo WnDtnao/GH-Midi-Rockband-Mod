@@ -29,11 +29,12 @@ const juce::String arrowNE(juce::CharPointer_UTF8("\xE2\x86\x97"));  // north-ea
 
 juce::Rectangle<int> panelBounds(int W, int H)
 {
-    // +60 tall vs. the original 500x480: room for the QuickBind DIAGRAM/TABLE
-    // toggle row, the Windows real-MIDI-output row, and a fixed-height
-    // bind area (diagram aspect-fits, table scrolls -- neither needs to grow
-    // with LTargetCount, so this height doesn't either)
-    return { W / 2 - 250, H / 2 - 270, 500, 540 };
+    // +120 tall vs. the original 500x480: the QuickBind DIAGRAM/TABLE toggle
+    // row, a fixed-height bind area (diagram aspect-fits, table scrolls --
+    // neither needs to grow with LTargetCount, so this height doesn't
+    // either), the Windows real-MIDI-output row, and the two pedal rows
+    // (HID device + MIDI input).
+    return { W / 2 - 250, H / 2 - 300, 500, 600 };
 }
 juce::Rectangle<int> helpBounds(int W, int H)
 {
@@ -190,6 +191,31 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
             proc.guitar().selectMidiOutput(shownMidiOuts[idx].identifier);
     };
 
+    // pedal-as-controller: a second HID device (shares the guitar's device
+    // list/RESCAN above) and/or a MIDI input, each independently optional
+    initLabel(pedalLabel, "Pedal (HID)");
+    addChildComponent(pedalBox);
+    pedalBox.setTextWhenNothingSelected("(none)");
+    pedalBox.onChange = [this]
+    {
+        const int idx = pedalBox.getSelectedId() - 2;   // id 1 = "(none)"
+        if (idx < 0)
+            proc.guitar().selectPedalDevice(0, 0);
+        else if (idx < shownDevices.size())
+            proc.guitar().selectPedalDevice(shownDevices[idx].vid, shownDevices[idx].pid);
+    };
+    initLabel(midiInLabel, "Pedal (MIDI in)");
+    addChildComponent(midiInBox);
+    midiInBox.setTextWhenNothingSelected("(none)");
+    midiInBox.onChange = [this]
+    {
+        const int idx = midiInBox.getSelectedId() - 2;   // id 1 = "(none)"
+        if (idx < 0)
+            proc.guitar().selectMidiInput({});
+        else if (idx < shownMidiIns.size())
+            proc.guitar().selectMidiInput(shownMidiIns[idx].identifier);
+    };
+
     addChildComponent(vmidiToggle);
     vmidiToggle.onClick = [this]
     {
@@ -217,7 +243,7 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     if (auto* env = std::getenv("GHMIDI_HUDSNAP"); env != nullptr && juce::JUCEApplicationBase::isStandaloneApp())
         hudSnapDir = env;
 
-    setSize(720, 620);
+    setSize(720, 700);
     startTimerHz(30);
 }
 
@@ -247,7 +273,8 @@ void GHMidiEditor::setPanelVisible(bool visible)
         c->setVisible(! visible && ! helpOpen);
     for (auto* c : std::initializer_list<juce::Component*> {
              &deviceLabel, &deviceBox, &rescanBtn, &vmidiToggle,
-             &closeBtn, &diagramBtn, &tableBtn })
+             &closeBtn, &diagramBtn, &tableBtn,
+             &pedalLabel, &pedalBox, &midiInLabel, &midiInBox })
         c->setVisible(visible);
     // Windows (or anywhere else a virtual MIDI port couldn't be created):
     // show the real-output picker. Runtime check, not #ifdef.
@@ -260,6 +287,8 @@ void GHMidiEditor::setPanelVisible(bool visible)
         proc.guitar().requestDeviceScan();
         vmidiToggle.setToggleState(proc.guitar().virtualMidiOn.load(), juce::dontSendNotification);
         refreshMappingRows();
+        refreshPedalBox();
+        refreshMidiInBox();
         if (showMidiOut)
             refreshMidiOutBox();
     }
@@ -329,6 +358,7 @@ void GHMidiEditor::refreshDeviceBox()
     }
     if (selected > 0)
         deviceBox.setSelectedId(selected, juce::dontSendNotification);
+    refreshPedalBox();   // shares this same device list
 }
 
 void GHMidiEditor::refreshMidiOutBox()
@@ -345,6 +375,40 @@ void GHMidiEditor::refreshMidiOutBox()
     }
     if (selected > 0)
         midiOutBox.setSelectedId(selected, juce::dontSendNotification);
+}
+
+void GHMidiEditor::refreshPedalBox()
+{
+    // shownDevices is refreshed by refreshDeviceBox() (shared RESCAN/scan
+    // with the guitar); this just re-populates the pedal's own combo from it
+    pedalBox.clear(juce::dontSendNotification);
+    pedalBox.addItem("(none)", 1);
+    int selected = 1;
+    for (int i = 0; i < shownDevices.size(); ++i)
+    {
+        pedalBox.addItem(shownDevices[i].label, i + 2);
+        if (shownDevices[i].vid == proc.guitar().currentPedalVid()
+            && shownDevices[i].pid == proc.guitar().currentPedalPid()
+            && proc.guitar().currentPedalVid() != 0)
+            selected = i + 2;
+    }
+    pedalBox.setSelectedId(selected, juce::dontSendNotification);
+}
+
+void GHMidiEditor::refreshMidiInBox()
+{
+    shownMidiIns = proc.guitar().getMidiInputs();
+    midiInBox.clear(juce::dontSendNotification);
+    midiInBox.addItem("(none)", 1);
+    int selected = 1;
+    const auto currentId = proc.guitar().currentMidiInId();
+    for (int i = 0; i < shownMidiIns.size(); ++i)
+    {
+        midiInBox.addItem(shownMidiIns[i].name, i + 2);
+        if (shownMidiIns[i].identifier == currentId && currentId.isNotEmpty())
+            selected = i + 2;
+    }
+    midiInBox.setSelectedId(selected, juce::dontSendNotification);
 }
 
 void GHMidiEditor::refreshMappingRows()
@@ -412,7 +476,7 @@ void GHMidiEditor::timerCallback()
             for (int t = 0; t < rowLearn.size(); ++t)
                 rowLearn[t]->setButtonText(t == lt ? "..." : "LEARN");
             learnHint.setText(lt < 0 ? juce::String()
-                                     : (lt >= GuitarService::LWhammy
+                                     : (GuitarService::isAxisTarget(lt)
                                             ? "Now SWEEP the " + GuitarService::targetName(lt)
                                             : "Now PRESS the " + GuitarService::targetName(lt)),
                               juce::dontSendNotification);
@@ -497,6 +561,18 @@ void GHMidiEditor::resized()
         auto midiRow = r.removeFromTop(24);
         midiOutLabel.setBounds(midiRow.removeFromLeft(76));
         midiOutBox.setBounds(midiRow);
+    }
+    r.removeFromTop(6);
+    {
+        auto pedalRow = r.removeFromTop(24);
+        pedalLabel.setBounds(pedalRow.removeFromLeft(96));
+        pedalBox.setBounds(pedalRow);
+    }
+    r.removeFromTop(6);
+    {
+        auto midiInRow = r.removeFromTop(24);
+        midiInLabel.setBounds(midiInRow.removeFromLeft(96));
+        midiInBox.setBounds(midiInRow);
     }
 
     // help overlay
