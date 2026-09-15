@@ -35,15 +35,47 @@ through strum speeds, the joystick changes key (left/right) and octave
 (up/down, ±3 octaves in every mode) — and on-screen arrows do all four for
 controllers without a joystick.
 
+## Rock Band guitars
+
+Standard Rock Band guitars (Xplorer/Stratocaster-style, RB1/RB2/RB4) add an
+upper-fret row above the usual 5, plus a tilt sensor — LEARN/QuickBind them
+like any other control. Holding an upper fret, or tilting the guitar, sends
+whatever you strike up an octave, layered on top of what the lower frets
+already produce: two octaves of range in CHORDS/NOTES/SOLO without ever
+touching the joystick's octave nudge. (RB3's 102-button Pro Guitar neck is
+not supported — a different, far more involved protocol.)
+
+## Pedals
+
+A footswitch pedal (or a spare gamepad — the mapping is generic byte/bitmask
+HID, same engine as the guitar) can fire 7 actions instead of playing notes:
+next/previous mode, key up/down, octave up/down, and a sustain toggle. Map
+it from **SETTINGS → Pedal (HID)**, then LEARN each action like any other
+control (row table only for now — QuickBind's diagram is guitar-shaped and
+doesn't have a pedal picture yet).
+
+A MIDI pedal works the same way, independently: pick it from
+**SETTINGS → Pedal (MIDI in)**, then LEARN each action by sending the note
+or CC you want from the pedal — a note-on, or a CC message with value ≥ 64,
+binds it. A VST3 hosted in a DAW gets pedal MIDI through the host's own
+routing into the plugin instead of opening a system MIDI device itself (a
+plugin shouldn't grab a system device out from under its DAW); the
+Standalone app opens the picked device directly.
+
+A pedal-controlled audio effects chain (distortion/wah-style tone shaping)
+is a possible future addition, not built yet.
+
 ## QuickBind
 
 Open **SETTINGS** and you land on the **DIAGRAM** view: a picture of the
-guitar with one clickable button per control. Click a button on the diagram,
-then press (or sweep, for the whammy/joystick) that control on your
-controller — same LEARN engine as before, just click-the-picture instead of
-reading down a text list one row at a time. The old row-by-row **TABLE**
-view is still there next to it (handy for unusual controllers, or as a
-fallback), and both stay in sync with each other.
+guitar — lower frets, and the Rock Band upper-fret row + tilt pad above
+them — with one clickable button per control. Click a button on the
+diagram, then press (or sweep, for the whammy/joystick) that control on
+your controller — same LEARN engine as before, just click-the-picture
+instead of reading down a text list one row at a time. The old row-by-row
+**TABLE** view is still there next to it (scrollable — it's grown to 32
+rows across the guitar, Rock Band, and pedal controls; handy for unusual
+controllers too), and both stay in sync with each other.
 
 **No DAW required.** The release also ships a standalone app: while it runs,
 every DAW and synth app on your machine sees a MIDI input called "GH MIDI"
@@ -141,6 +173,9 @@ to take effect. The VST3 typically goes in `~/.vst3/`.
 - **Cross-platform**: builds and runs on Windows and Linux, in addition to
   the original's macOS.
 - **QuickBind**: click-the-picture control mapping (above).
+- **Rock Band guitar support**: upper-fret row + tilt sensor (above).
+- **Pedal support**: a second HID device and/or a MIDI input fire 7
+  performance actions instead of playing notes (above).
 - Own product identity ("GH MIDI Rockband Mod", its own VST3 plugin/bundle
   ID) so this can be installed side by side with the original GH MIDI
   without a naming or plugin-ID clash. Settings are also stored separately,
@@ -150,10 +185,9 @@ to take effect. The VST3 typically goes in `~/.vst3/`.
   flagged this gap; this fork fills it with a loopMIDI-compatible picker
   rather than requiring a bundled driver.
 
-**Planned, not in this build yet:** standard Rock Band guitar support
-(upper frets + tilt sensor, for a wider playable range than Guitar Hero's
-5 frets), pedal-as-controller support (MIDI/HID footswitches for fast
-mode/tone switching), and a pedal-controlled audio effects chain.
+**Not built yet:** a pedal-controlled audio effects chain (distortion/wah-
+style tone shaping) — a bigger, more open-ended addition since the plugin
+doesn't process audio at all today (it only ever produces MIDI).
 
 Modified under AGPL-3.0 §5(a) ("you must cause the modified files to carry
 prominent notices stating that you changed the files"); files substantially
