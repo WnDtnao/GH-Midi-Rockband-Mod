@@ -14,7 +14,7 @@ QuickBindPanel::QuickBindPanel(GHMidiProcessor& processorToUse) : proc(processor
 
 void QuickBindPanel::buildHotspots()
 {
-    bodyOutline.addRoundedRectangle(10.0f, 10.0f, 300.0f, 440.0f, 26.0f);
+    bodyOutline.addRoundedRectangle(10.0f, 10.0f, 300.0f, 350.0f, 24.0f);
 
     auto addCircle = [this](int target, float cx, float cy, float r, const juce::String& label)
     {
@@ -33,29 +33,36 @@ void QuickBindPanel::buildHotspots()
         hotspots.add(hs);
     };
 
-    // 5 frets, green..orange -- matches Theme::gemColours / the "GRYBO" order
-    // used elsewhere (e.g. GuitarService::announceFrets)
-    const float fretY = 86.0f, fretR = 22.0f;
+    // fret x positions, green..orange -- matches Theme::gemColours / the
+    // "GRYBO" order used elsewhere (e.g. GuitarService::announceFrets)
     const float fretX[5] = { 64.0f, 120.0f, 176.0f, 232.0f, 288.0f };
     const char* fretLabel[5] = { "G", "R", "Y", "B", "O" };
+
+    // Rock Band standard guitars only: an upper-fret row (same colours,
+    // same order) above the usual lower row. Unlabelled as "upper" -- row
+    // position plus colour already says which is which, same idea as the
+    // guitar itself.
     for (int i = 0; i < 5; ++i)
-        addCircle(i, fretX[i], fretY, fretR, fretLabel[i]);
+        addCircle(GuitarService::LFretUpG + i, fretX[i], 46.0f, 18.0f, fretLabel[i]);
+    for (int i = 0; i < 5; ++i)
+        addCircle(i, fretX[i], 92.0f, 20.0f, fretLabel[i]);
 
     // strum bar: one rect hotspot per half
-    addRect(GuitarService::LStrumUp,   60.0f, 150.0f, 212.0f, 28.0f, 8.0f, "UP");
-    addRect(GuitarService::LStrumDown, 60.0f, 178.0f, 212.0f, 28.0f, 8.0f, "DN");
+    addRect(GuitarService::LStrumUp,   60.0f, 132.0f, 212.0f, 26.0f, 8.0f, "UP");
+    addRect(GuitarService::LStrumDown, 60.0f, 158.0f, 212.0f, 26.0f, 8.0f, "DN");
 
     // whammy bar
-    addRect(GuitarService::LWhammy, 36.0f, 250.0f, 132.0f, 42.0f, 14.0f, "WHAMMY");
+    addRect(GuitarService::LWhammy, 36.0f, 198.0f, 132.0f, 36.0f, 14.0f, "WHAMMY");
 
     // joystick: two chips -- left/right axis and up/down axis are separate
     // LEARN targets even though they're one physical stick
-    addRect(GuitarService::LStickX, 212.0f, 308.0f, 38.0f, 28.0f, 8.0f, "L/R");
-    addRect(GuitarService::LStickY, 254.0f, 308.0f, 38.0f, 28.0f, 8.0f, "U/D");
+    addRect(GuitarService::LStickX, 212.0f, 250.0f, 38.0f, 26.0f, 8.0f, "L/R");
+    addRect(GuitarService::LStickY, 254.0f, 250.0f, 38.0f, 26.0f, 8.0f, "U/D");
 
-    // plus / minus
-    addCircle(GuitarService::LMinus, 80.0f,  332.0f, 20.0f, "-");
-    addCircle(GuitarService::LPlus,  140.0f, 332.0f, 20.0f, "+");
+    // bottom row: minus / plus, and (Rock Band only) the tilt sensor
+    addCircle(GuitarService::LMinus, 78.0f,  308.0f, 17.0f, "-");
+    addCircle(GuitarService::LPlus,  134.0f, 308.0f, 17.0f, "+");
+    addRect(GuitarService::LTilt, 172.0f, 292.0f, 128.0f, 32.0f, 10.0f, "TILT");
 }
 
 void QuickBindPanel::resized()
@@ -65,7 +72,7 @@ void QuickBindPanel::resized()
 
 void QuickBindPanel::layoutHotspots()
 {
-    constexpr float canvasW = 320.0f, canvasH = 460.0f;
+    constexpr float canvasW = 320.0f, canvasH = 380.0f;
     const float w = (float) getWidth(), h = (float) getHeight();
     if (w <= 0.0f || h <= 0.0f)
         return;
@@ -113,8 +120,10 @@ void QuickBindPanel::mouseDown(const juce::MouseEvent& e)
 
 void QuickBindPanel::drawHotspot(juce::Graphics& g, const Hotspot& hs, bool learning, bool mapped, bool live) const
 {
-    const bool isFret = hs.target >= 0 && hs.target <= GuitarService::LFretO;
-    const juce::Colour baseColour = isFret ? Theme::gemColours[hs.target] : Theme::gold;
+    const bool isLowerFret = hs.target >= 0 && hs.target <= GuitarService::LFretO;
+    const bool isUpperFret = hs.target >= GuitarService::LFretUpG && hs.target <= GuitarService::LFretUpO;
+    const int gemIndex = isLowerFret ? hs.target : (isUpperFret ? hs.target - GuitarService::LFretUpG : -1);
+    const juce::Colour baseColour = gemIndex >= 0 ? Theme::gemColours[gemIndex] : Theme::gold;
 
     float fillAlpha = 0.10f, strokeAlpha = 0.35f, strokeW = 1.4f;
     if (mapped) { fillAlpha = 0.30f; strokeAlpha = 0.85f; strokeW = 1.8f; }

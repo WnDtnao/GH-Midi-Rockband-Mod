@@ -126,6 +126,11 @@ static void varToMap(const juce::var& v, GuitarService::ControllerMap& m)
     btn("fretB", m.frets[3]); btn("fretO", m.frets[4]);
     btn("strumDown", m.strumDown); btn("strumUp", m.strumUp);
     btn("plus", m.plusBtn); btn("minus", m.minusBtn);
+    // Rock Band standard guitars only; absent in older settings files, which
+    // leaves these unmapped (invalid()) rather than failing to load
+    btn("fretUpG", m.upperFrets[0]); btn("fretUpR", m.upperFrets[1]); btn("fretUpY", m.upperFrets[2]);
+    btn("fretUpB", m.upperFrets[3]); btn("fretUpO", m.upperFrets[4]);
+    btn("tilt", m.tilt);
     if (auto* a = v["whammy"].getArray(); a != nullptr && a->size() >= 3)
         m.whammy = { (int) (*a)[0], (int) (*a)[1], (int) (*a)[2] };
     auto stick = [&](const char* k, GuitarService::StickMap& sm)
@@ -148,6 +153,9 @@ static juce::var mapToVar(const GuitarService::ControllerMap& m)
     btn("fretB", m.frets[3]); btn("fretO", m.frets[4]);
     btn("strumDown", m.strumDown); btn("strumUp", m.strumUp);
     btn("plus", m.plusBtn); btn("minus", m.minusBtn);
+    btn("fretUpG", m.upperFrets[0]); btn("fretUpR", m.upperFrets[1]); btn("fretUpY", m.upperFrets[2]);
+    btn("fretUpB", m.upperFrets[3]); btn("fretUpO", m.upperFrets[4]);
+    btn("tilt", m.tilt);
     o->setProperty("whammy", juce::Array<juce::var> { m.whammy.byteIdx, m.whammy.rest, m.whammy.extreme });
     o->setProperty("stickX", juce::Array<juce::var> { m.stickX.byteIdx, m.stickX.center, m.stickX.lo, m.stickX.hi });
     o->setProperty("stickY", juce::Array<juce::var> { m.stickY.byteIdx, m.stickY.center, m.stickY.lo, m.stickY.hi });
@@ -567,7 +575,9 @@ juce::String GuitarService::targetName(int t)
 {
     static const char* names[] = { "GREEN FRET", "RED FRET", "YELLOW FRET", "BLUE FRET",
                                    "ORANGE FRET", "STRUM DOWN", "STRUM UP", "PLUS BUTTON",
-                                   "MINUS BUTTON", "WHAMMY", "JOYSTICK LEFT/RIGHT", "JOYSTICK UP/DOWN" };
+                                   "MINUS BUTTON", "WHAMMY", "JOYSTICK LEFT/RIGHT", "JOYSTICK UP/DOWN",
+                                   "UPPER GREEN FRET", "UPPER RED FRET", "UPPER YELLOW FRET",
+                                   "UPPER BLUE FRET", "UPPER ORANGE FRET", "TILT SENSOR" };
     return t >= 0 && t < LTargetCount ? names[t] : juce::String();
 }
 
@@ -580,6 +590,10 @@ static GuitarService::ButtonMap* buttonSlot(GuitarService::ControllerMap& m, int
         case 6: return &m.strumUp;
         case 7: return &m.plusBtn;
         case 8: return &m.minusBtn;
+        case GuitarService::LFretUpG: case GuitarService::LFretUpR: case GuitarService::LFretUpY:
+        case GuitarService::LFretUpB: case GuitarService::LFretUpO:
+            return &m.upperFrets[t - GuitarService::LFretUpG];
+        case GuitarService::LTilt: return &m.tilt;
         default: return nullptr;
     }
 }
@@ -652,11 +666,17 @@ void GuitarService::learnTick(const uint8_t* d, int len, double now)
     {
         for (auto& b : map.frets)
             if (b.byteIdx == i) return true;
+        for (auto& b : map.upperFrets)
+            if (b.byteIdx == i) return true;
         return map.strumDown.byteIdx == i || map.strumUp.byteIdx == i
-            || map.plusBtn.byteIdx == i || map.minusBtn.byteIdx == i;
+            || map.plusBtn.byteIdx == i || map.minusBtn.byteIdx == i
+            || map.tilt.byteIdx == i;
     };
 
-    if (t <= LMinus)  // buttons: first stable change binds
+    // buttons: LFretG..LMinus, plus the Rock Band upper frets + tilt
+    // (LFretUpG..LTilt); everything in between (LWhammy/LStickX/LStickY) is
+    // axis-learned below
+    if (t <= LMinus || t >= LFretUpG)  // buttons: first stable change binds
     {
         if (learnPhase == 1)
         {
@@ -811,6 +831,22 @@ void GuitarService::step(const uint8_t* d, int len)
     for (int i = 0; i < 5; ++i)
         if (pressed(m.frets[i]))
             combo |= 1 << i;
+    // Rock Band standard guitars: an upper-fret row above the usual 5, plus a
+    // tilt sensor. GH guitars never map these (comboUpper stays 0, tiltOn
+    // stays false), so everything below involving them is a strict no-op for
+    // GH guitars -- zero regression risk.
+    int comboUpper = 0;
+    for (int i = 0; i < 5; ++i)
+        if (pressed(m.upperFrets[i]))
+            comboUpper |= 1 << i;
+    const bool tiltOn = pressed(m.tilt);
+    // an upper fret counts as "this colour is fretted" everywhere below (chord
+    // selection, the chromatic index, release-gating, CHART lanes); comboUpper
+    // is kept separately just to know an octave-up boost is owed
+    combo |= comboUpper;
+    // Rock Band: holding an upper fret, or tilting the guitar, sends
+    // newly-struck notes an octave up (does not retune notes already ringing)
+    const int octBoost = (comboUpper != 0 || tiltOn) ? 12 : 0;
     const bool down = pressed(m.strumDown);
     const bool up = pressed(m.strumUp);
     const bool strum = down || up;
@@ -847,6 +883,8 @@ void GuitarService::step(const uint8_t* d, int len)
         if (m.stickY.valid() && m.stickY.byteIdx < len
             && std::abs((int) d[m.stickY.byteIdx] - m.stickY.center) > (m.stickY.hi - m.stickY.lo) / 5)
             bits |= 1 << LStickY;
+        bits |= comboUpper << LFretUpG;
+        if (tiltOn) bits |= 1 << LTilt;
         uiButtonBits = bits;   // whammy bit added below
     }
 
@@ -945,7 +983,7 @@ void GuitarService::step(const uint8_t* d, int len)
                         mask = 1 << strumTopFret;   // unmapped combo: top fret's chord
                         chordForMask(mask, cd);
                     }
-                    const int root = kChordRootBase + key + easyOct + cd.rootOff;
+                    const int root = kChordRootBase + key + easyOct + cd.rootOff + octBoost;
                     const int third = root + cd.third;
                     const int topNote = cd.seventh > 0 ? root + cd.seventh : root + 12;
                     const int rollMs = juce::jlimit(0, 50, strumRollMs.load());
@@ -973,15 +1011,15 @@ void GuitarService::step(const uint8_t* d, int len)
                 }
                 else
                 {
-                    noteOn(kBassBase + key + easyOct, kVelDown);
+                    noteOn(kBassBase + key + easyOct + octBoost, kVelDown);
                     ringFret = -1;
                     beginGem(0, false);
-                    announce(noteName(kBassBase + key + easyOct));
+                    announce(noteName(kBassBase + key + easyOct + octBoost));
                 }
             }
             else if (mode == Real)
             {
-                const int nn = kRealBase + key + octaveReal + combo;
+                const int nn = kRealBase + key + octaveReal + combo + octBoost;
                 noteOn(nn, vel);
                 ringCombo = combo;
                 beginGem(combo, false);
@@ -999,7 +1037,7 @@ void GuitarService::step(const uint8_t* d, int len)
                         const int i = latchDown ? k2 : 4 - k2;  // sweep direction
                         if (! (combo & (1 << i)))
                             continue;
-                        soloNotes[i] = pentaNote(key, octaveReal, i);
+                        soloNotes[i] = pentaNote(key, octaveReal, i) + octBoost;
                         if (! first && rollMs > 0)
                             juce::Thread::sleep(rollMs);
                         noteOn(soloNotes[i], vel);
@@ -1013,7 +1051,7 @@ void GuitarService::step(const uint8_t* d, int len)
                 }
                 else
                 {
-                    const int pn = pentaNote(key, octaveReal, -1);
+                    const int pn = pentaNote(key, octaveReal, -1) + octBoost;
                     noteOn(pn, vel);
                     ringFret = -1;  // the open root follows the strum bar
                     beginGem(0, false);

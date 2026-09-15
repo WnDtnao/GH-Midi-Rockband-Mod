@@ -29,10 +29,11 @@ const juce::String arrowNE(juce::CharPointer_UTF8("\xE2\x86\x97"));  // north-ea
 
 juce::Rectangle<int> panelBounds(int W, int H)
 {
-    // +40 tall vs. the original 500x480: room for the QuickBind DIAGRAM/TABLE
-    // toggle row and the Windows real-MIDI-output row, without touching the
-    // 12-row mapping table's own layout
-    return { W / 2 - 250, H / 2 - 260, 500, 520 };
+    // +60 tall vs. the original 500x480: room for the QuickBind DIAGRAM/TABLE
+    // toggle row, the Windows real-MIDI-output row, and a fixed-height
+    // bind area (diagram aspect-fits, table scrolls -- neither needs to grow
+    // with LTargetCount, so this height doesn't either)
+    return { W / 2 - 250, H / 2 - 270, 500, 540 };
 }
 juce::Rectangle<int> helpBounds(int W, int H)
 {
@@ -120,23 +121,31 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     addChildComponent(rescanBtn);
     rescanBtn.onClick = [this] { proc.guitar().requestDeviceScan(); };
 
-    // mapping table: one row per control, LEARN / CLEAR each
+    // mapping table: one row per control, LEARN / CLEAR each. Rows live in
+    // rowTableContent, scrolled by rowTableViewport, so the list can keep
+    // growing (Rock Band added 6 rows; pedals will add more) without
+    // outgrowing the settings panel.
+    addChildComponent(rowTableViewport);
+    rowTableViewport.setViewedComponent(&rowTableContent, false);
+    rowTableViewport.setScrollBarsShown(true, false);   // vertical only, shown only when needed
     for (int t = 0; t < GuitarService::LTargetCount; ++t)
     {
         auto* name = rowNames.add(new juce::Label());
-        addChildComponent(name);
+        rowTableContent.addAndMakeVisible(name);
         name->setText(GuitarService::targetName(t), juce::dontSendNotification);
         name->setFont(juce::Font(juce::FontOptions(12.0f, juce::Font::bold)));
+        const bool fretColoured = t < 5 || (t >= GuitarService::LFretUpG && t <= GuitarService::LFretUpO);
+        const int gemIdx = t < 5 ? t : t - GuitarService::LFretUpG;
         name->setColour(juce::Label::textColourId,
-                        t < 5 ? gemColours[t] : juce::Colours::white.withAlpha(0.85f));
+                        fretColoured ? gemColours[gemIdx] : juce::Colours::white.withAlpha(0.85f));
 
         auto* desc = rowDescs.add(new juce::Label());
-        addChildComponent(desc);
+        rowTableContent.addAndMakeVisible(desc);
         desc->setFont(juce::Font(juce::FontOptions(12.0f)));
         desc->setColour(juce::Label::textColourId, juce::Colours::white.withAlpha(0.55f));
 
         auto* learn = rowLearn.add(new juce::TextButton("LEARN"));
-        addChildComponent(learn);
+        rowTableContent.addAndMakeVisible(learn);
         learn->onClick = [this, t]
         {
             auto& svc = proc.guitar();
@@ -147,7 +156,7 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
         };
 
         auto* clear = rowClear.add(new juce::TextButton("X"));
-        addChildComponent(clear);
+        rowTableContent.addAndMakeVisible(clear);
         clear->onClick = [this, t] { proc.guitar().clearMapping(t); };
     }
 
@@ -265,13 +274,7 @@ void GHMidiEditor::updateBindModeVisibility()
     quickBind.setVisible(panelOpen && quickBindMode);
     const bool showRow = panelOpen && ! quickBindMode;
     learnHint.setVisible(showRow);   // QuickBind draws its own equivalent hint
-    for (int t = 0; t < rowNames.size(); ++t)
-    {
-        rowNames[t]->setVisible(showRow);
-        rowDescs[t]->setVisible(showRow);
-        rowLearn[t]->setVisible(showRow);
-        rowClear[t]->setVisible(showRow);
-    }
+    rowTableViewport.setVisible(showRow);   // rows themselves stay visible inside rowTableContent
 }
 
 void GHMidiEditor::syncSustainButtons()
@@ -466,18 +469,26 @@ void GHMidiEditor::resized()
     learnHint.setBounds(r.removeFromTop(18));
     r.removeFromTop(4);
     // QuickBind's diagram and the row table share this same region -- only
-    // one is visible at a time (see updateBindModeVisibility())
-    auto bindArea = r.removeFromTop(rowNames.size() * 24);
+    // one is visible at a time (see updateBindModeVisibility()). Fixed
+    // height, independent of LTargetCount: the table scrolls, the diagram
+    // aspect-fits, so neither needs the panel to grow as more targets
+    // (Rock Band, then pedals) are added.
+    auto bindArea = r.removeFromTop(300);
     quickBind.setBounds(bindArea);
-    for (int t = 0; t < rowNames.size(); ++t)
+    rowTableViewport.setBounds(bindArea);
     {
-        auto row = bindArea.removeFromTop(22);
-        rowNames[t]->setBounds(row.removeFromLeft(136));
-        rowClear[t]->setBounds(row.removeFromRight(30).reduced(0, 1));
-        row.removeFromRight(4);
-        rowLearn[t]->setBounds(row.removeFromRight(62).reduced(0, 1));
-        rowDescs[t]->setBounds(row);
-        bindArea.removeFromTop(2);
+        const int rowH = 24;
+        rowTableContent.setSize(bindArea.getWidth() - rowTableViewport.getScrollBarThickness(),
+                                 rowNames.size() * rowH);
+        for (int t = 0; t < rowNames.size(); ++t)
+        {
+            auto row = juce::Rectangle<int>(0, t * rowH, rowTableContent.getWidth(), 22);
+            rowNames[t]->setBounds(row.removeFromLeft(136));
+            rowClear[t]->setBounds(row.removeFromRight(30).reduced(0, 1));
+            row.removeFromRight(4);
+            rowLearn[t]->setBounds(row.removeFromRight(62).reduced(0, 1));
+            rowDescs[t]->setBounds(row);
+        }
     }
     r.removeFromTop(8);
     vmidiToggle.setBounds(r.removeFromTop(24));

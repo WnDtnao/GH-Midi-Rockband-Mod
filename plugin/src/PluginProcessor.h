@@ -44,6 +44,11 @@ public:
         ButtonMap frets[5], strumDown, strumUp, plusBtn, minusBtn;
         AxisMap whammy;
         StickMap stickX, stickY;
+        // Rock Band standard guitars: an upper-fret row (green..orange, same
+        // order as frets[]) above the usual 5, plus a tilt sensor. Both stay
+        // unmapped (invalid()) for GH guitars.
+        ButtonMap upperFrets[5];
+        ButtonMap tilt;
     };
 
     struct DeviceInfo
@@ -130,6 +135,8 @@ public:
     // per-control mapping: each row learned or cleared independently
     enum LearnTarget { LFretG = 0, LFretR, LFretY, LFretB, LFretO,
                        LStrumDown, LStrumUp, LPlus, LMinus, LWhammy, LStickX, LStickY,
+                       // Rock Band standard guitars only -- see ControllerMap
+                       LFretUpG, LFretUpR, LFretUpY, LFretUpB, LFretUpO, LTilt,
                        LTargetCount };
     void startLearn(int target) { learnTarget = juce::jlimit(0, LTargetCount - 1, target); learnPhase = 0; learnT0req = true; notify(); }
     void cancelLearn() { learnTarget = -1; }

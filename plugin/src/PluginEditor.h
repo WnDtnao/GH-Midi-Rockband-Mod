@@ -47,9 +47,13 @@ private:
     juce::TextButton rescanBtn { "RESCAN" }, closeBtn { "X" };
     juce::ToggleButton vmidiToggle { "Virtual MIDI output (record notes in your DAW)" };
 
-    // QuickBind diagram (default) vs. the generic per-row table
+    // QuickBind diagram (default) vs. the generic per-row table. The table is
+    // scrollable (juce::Viewport) since LTargetCount only grows as more
+    // controller types are added (Rock Band added 6; pedals will add more).
     bool quickBindMode = true;
     juce::TextButton diagramBtn { "DIAGRAM" }, tableBtn { "TABLE" };
+    juce::Viewport rowTableViewport;
+    juce::Component rowTableContent;
     juce::OwnedArray<juce::Label> rowNames, rowDescs;
     juce::OwnedArray<juce::TextButton> rowLearn, rowClear;
 
