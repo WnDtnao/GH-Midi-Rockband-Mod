@@ -1,0 +1,10 @@
+plugin/build/
+release/*.zip
+release/GH-MIDI-v*/
+.venv/
+__pycache__/
+*.log
+.DS_Store
+guide/guide.html
+guide/.chrome-profile/
+release/*.pdf
