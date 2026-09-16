@@ -214,11 +214,6 @@ input backend beyond hidapi) — PRs welcome, same as upstream.
 `tools/` scripts from the prototyping era (Python HID dump / mapper / MIDI
 bridge) are kept for adapter debugging.
 
-## Made with Claude Code
-
-The original plugin, README and user guide were made with Claude Code; so
-is this fork. Some details may be inaccurate; the code is the reference.
-
 ## 3D model style
 
 SETTINGS → **3D model style** switches the highway's gem/fret look between
