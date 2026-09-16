@@ -29,12 +29,14 @@ const juce::String arrowNE(juce::CharPointer_UTF8("\xE2\x86\x97"));  // north-ea
 
 juce::Rectangle<int> panelBounds(int W, int H)
 {
-    // +120 tall vs. the original 500x480: the QuickBind DIAGRAM/TABLE toggle
+    // +150 tall vs. the original 500x480: the QuickBind DIAGRAM/TABLE toggle
     // row, a fixed-height bind area (diagram aspect-fits, table scrolls --
     // neither needs to grow with LTargetCount, so this height doesn't
-    // either), the Windows real-MIDI-output row, and the two pedal rows
-    // (HID device + MIDI input).
-    return { W / 2 - 250, H / 2 - 300, 500, 600 };
+    // either), the Windows real-MIDI-output row, the two pedal rows (HID
+    // device + MIDI input), and the 3D model style row. (This panel's row
+    // count has grown across every milestone so far -- Phase G's settings
+    // reorganization is where this stops being "just add another row".)
+    return { W / 2 - 250, H / 2 - 315, 500, 630 };
 }
 juce::Rectangle<int> helpBounds(int W, int H)
 {
@@ -216,6 +218,24 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
             proc.guitar().selectMidiInput(shownMidiIns[idx].identifier);
     };
 
+    // 3D highway model style: hand-built (default) or YARG-derived textured
+    initLabel(modelStyleLabel, "3D model style");
+    for (auto* b : { &modelClassicBtn, &modelYargBtn })
+    {
+        addChildComponent(*b);
+        b->setWantsKeyboardFocus(false);
+        b->setClickingTogglesState(true);
+        b->setRadioGroupId(1003);
+        b->setColour(juce::TextButton::buttonOnColourId, gold);
+        b->setColour(juce::TextButton::textColourOnId, juce::Colour(0xff15151f));
+    }
+    modelClassicBtn.setConnectedEdges(juce::Button::ConnectedOnRight);
+    modelYargBtn.setConnectedEdges(juce::Button::ConnectedOnLeft);
+    modelClassicBtn.setToggleState(proc.guitar().modelStyle.load() == GuitarService::ModelClassic, juce::dontSendNotification);
+    modelYargBtn.setToggleState(proc.guitar().modelStyle.load() == GuitarService::ModelYarg, juce::dontSendNotification);
+    modelClassicBtn.onClick = [this] { proc.guitar().modelStyle = GuitarService::ModelClassic; proc.guitar().requestSave(); };
+    modelYargBtn.onClick   = [this] { proc.guitar().modelStyle = GuitarService::ModelYarg;    proc.guitar().requestSave(); };
+
     addChildComponent(vmidiToggle);
     vmidiToggle.onClick = [this]
     {
@@ -243,7 +263,7 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     if (auto* env = std::getenv("GHMIDI_HUDSNAP"); env != nullptr && juce::JUCEApplicationBase::isStandaloneApp())
         hudSnapDir = env;
 
-    setSize(720, 700);
+    setSize(720, 730);
     startTimerHz(30);
 }
 
@@ -274,7 +294,8 @@ void GHMidiEditor::setPanelVisible(bool visible)
     for (auto* c : std::initializer_list<juce::Component*> {
              &deviceLabel, &deviceBox, &rescanBtn, &vmidiToggle,
              &closeBtn, &diagramBtn, &tableBtn,
-             &pedalLabel, &pedalBox, &midiInLabel, &midiInBox })
+             &pedalLabel, &pedalBox, &midiInLabel, &midiInBox,
+             &modelStyleLabel, &modelClassicBtn, &modelYargBtn })
         c->setVisible(visible);
     // Windows (or anywhere else a virtual MIDI port couldn't be created):
     // show the real-output picker. Runtime check, not #ifdef.
@@ -573,6 +594,13 @@ void GHMidiEditor::resized()
         auto midiInRow = r.removeFromTop(24);
         midiInLabel.setBounds(midiInRow.removeFromLeft(96));
         midiInBox.setBounds(midiInRow);
+    }
+    r.removeFromTop(6);
+    {
+        auto modelRow = r.removeFromTop(24);
+        modelStyleLabel.setBounds(modelRow.removeFromLeft(96));
+        modelClassicBtn.setBounds(modelRow.removeFromLeft(84).reduced(1, 0));
+        modelYargBtn.setBounds(modelRow.removeFromLeft(84).reduced(1, 0));
     }
 
     // help overlay

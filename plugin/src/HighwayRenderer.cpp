@@ -1,4 +1,5 @@
 #include "HighwayRenderer.h"
+#include <BinaryData.h>
 #include <cstdlib>
 #include <iostream>
 #include <cmath>
@@ -238,6 +239,56 @@ void main()
     frag = vec4(c, 1.0);
 })";
 
+// Rockband Mod (2026) addition: textured variant of kMeshVert/kMeshFrag for
+// YARG-derived models (see ModelAsset.h) -- same lighting shape (one
+// directional light, fog), but samples a texture (tinted per-lane, matching
+// how YARG's own note/fret materials use a white base texture recoloured at
+// runtime rather than five separate coloured materials) instead of
+// thresholding a flat material-ID float.
+const char* kTexMeshVert = R"(#version 150
+in vec3 aPos;
+in vec3 aNormal;
+in vec2 aUV;
+uniform mat4 uViewProj;
+uniform mat4 uModel;
+out vec3 vNormal;
+out vec3 vWorld;
+out vec2 vUV;
+void main()
+{
+    vec4 w = uModel * vec4(aPos, 1.0);
+    vWorld = w.xyz;
+    vNormal = normalize(transpose(inverse(mat3(uModel))) * aNormal);
+    vUV = aUV;
+    gl_Position = uViewProj * w;
+})";
+
+const char* kTexMeshFrag = R"(#version 150
+in vec3 vNormal;
+in vec3 vWorld;
+in vec2 vUV;
+out vec4 frag;
+uniform sampler2D uTex;
+uniform vec3 uTintColor;
+uniform vec3 uEye;
+uniform float uEmissive;
+void main()
+{
+    vec4 texel = texture(uTex, vUV);
+    vec3 base = texel.rgb * uTintColor;
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(vec3(-0.25, 1.0, 0.55));
+    vec3 V = normalize(uEye - vWorld);
+    vec3 Hv = normalize(L + V);
+    float diff = max(dot(N, L), 0.0);
+    float spec = pow(max(dot(N, Hv), 0.0), 40.0);
+    vec3 c = base * clamp(0.55 + 0.70 * diff, 0.0, 1.30) + vec3(1.0) * spec * 0.35;
+    c += uTintColor * uEmissive;
+    float fog = (1.0 - smoothstep(-8.8, -3.8, vWorld.z)) * 0.72;
+    c = mix(c, vec3(0.185, 0.150, 0.33), fog);
+    frag = vec4(c, texel.a);
+})";
+
 const char* kSpriteVert = R"(#version 150
 in vec2 aPos;
 uniform mat4 uViewProj;
@@ -413,6 +464,16 @@ void HighwayRenderer::newOpenGLContextCreated()
     boardProg = makeProgram(*context, kBoardVert, kBoardFrag, { "aPos" });
     meshProg = makeProgram(*context, kMeshVert, kMeshFrag, { "aPos", "aNormal", "aMat" });
     spriteProg = makeProgram(*context, kSpriteVert, kSpriteFrag, { "aPos" });
+    texMeshProg = makeProgram(*context, kTexMeshVert, kTexMeshFrag, { "aPos", "aNormal", "aUV" });
+
+    // YARG-derived model set (optional -- Classic style, the default, never
+    // touches this). Load failure just leaves isLoaded() false; the draw
+    // code below falls back to the classic meshes rather than losing the
+    // whole highway over one missing/corrupt embedded asset.
+    yargFretModel.load(BinaryData::yarg_fret_obj, BinaryData::yarg_fret_objSize,
+                       BinaryData::yarg_fret_png, BinaryData::yarg_fret_pngSize);
+    yargGemModel.load(BinaryData::yarg_note_obj, BinaryData::yarg_note_objSize,
+                      BinaryData::yarg_note_png, BinaryData::yarg_note_pngSize);
 
     quad = buildQuad();
 
@@ -491,7 +552,9 @@ void HighwayRenderer::openGLContextClosing()
         m = {};
     };
     kill(quad); kill(board); kill(gemMesh); kill(buttonMesh); kill(capMesh);
-    bgProg.reset(); boardProg.reset(); meshProg.reset(); spriteProg.reset();
+    yargFretModel.release();
+    yargGemModel.release();
+    bgProg.reset(); boardProg.reset(); meshProg.reset(); spriteProg.reset(); texMeshProg.reset();
     ready = false;
 }
 
@@ -507,6 +570,24 @@ void HighwayRenderer::drawMesh(const Mesh& m)
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, stride, (void*) (6 * sizeof(float)));
     glDrawElements(GL_TRIANGLES, m.indexCount, GL_UNSIGNED_SHORT, nullptr);
+    glDisableVertexAttribArray(1);
+    glDisableVertexAttribArray(2);
+}
+
+void HighwayRenderer::drawModelAsset(const ModelAsset& asset)
+{
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, asset.getTextureId());
+    glBindBuffer(GL_ARRAY_BUFFER, asset.getVbo());
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, asset.getIbo());
+    const auto stride = (GLsizei) (8 * sizeof(float));   // pos.xyz, normal.xyz, uv.xy
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*) 0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*) (3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (void*) (6 * sizeof(float)));
+    glDrawElements(GL_TRIANGLES, asset.getIndexCount(), GL_UNSIGNED_SHORT, nullptr);
     glDisableVertexAttribArray(1);
     glDisableVertexAttribArray(2);
 }
@@ -651,24 +732,50 @@ void HighwayRenderer::renderOpenGL()
     meshProg->setUniformMat4("uViewProj", vp.data(), 1, GL_FALSE);
     meshProg->setUniform("uEye", eye[0], eye[1], eye[2]);
 
+    // Rockband Mod: YARG style swaps the flat hand-built meshes below for
+    // textured ones (see ModelAsset.h); falls back to Classic if either
+    // failed to load, so a bad/missing embedded asset never blanks the
+    // whole highway. Classic path (the `else`s below) is byte-for-byte the
+    // same code that was already here.
+    const bool useYarg = proc.guitar().modelStyle.load() == GuitarService::ModelYarg
+                       && texMeshProg != nullptr
+                       && yargFretModel.isLoaded() && yargGemModel.isLoaded();
+    constexpr float kYargScale = 0.09f;   // YARG's meshes are Unity-scale (~1-2 units); this project's scene is much smaller
+
     // strike buttons
     for (int lane = 0; lane < 5; ++lane)
     {
         const auto& lc = laneColours[lane];
-        const Mat4 model = matTRS(laneXw(lane), 0.0f, kZStrike, 1.12f);
-        meshProg->setUniformMat4("uModel", model.data(), 1, GL_FALSE);
         const float lum = 0.62f + 0.38f * pressAmount[lane];
-        meshProg->setUniform("uLaneColor", lc[0] * lum, lc[1] * lum, lc[2] * lum);
-        meshProg->setUniform("uCapColor", 0.055f, 0.055f, 0.075f);
-        meshProg->setUniform("uEmissive", pressAmount[lane] * 0.65f);
-        drawMesh(buttonMesh);
-        if (pressAmount[lane] > 0.03f)
+        if (useYarg)
         {
-            const Mat4 capM = matTRS(laneXw(lane), 0.01f + 0.02f * pressAmount[lane], kZStrike,
-                                     1.0f, pressAmount[lane]);
-            meshProg->setUniformMat4("uModel", capM.data(), 1, GL_FALSE);
-            meshProg->setUniform("uEmissive", pressAmount[lane] * 0.9f);
-            drawMesh(capMesh);
+            texMeshProg->use();
+            texMeshProg->setUniform("uTex", 0);
+            texMeshProg->setUniformMat4("uViewProj", vp.data(), 1, GL_FALSE);
+            texMeshProg->setUniform("uEye", eye[0], eye[1], eye[2]);
+            const Mat4 model = matTRS(laneXw(lane), 0.0f, kZStrike, kYargScale);
+            texMeshProg->setUniformMat4("uModel", model.data(), 1, GL_FALSE);
+            texMeshProg->setUniform("uTintColor", lc[0] * lum, lc[1] * lum, lc[2] * lum);
+            texMeshProg->setUniform("uEmissive", pressAmount[lane] * 0.65f);
+            drawModelAsset(yargFretModel);
+            meshProg->use();   // hand back to the classic program for anything else this frame expects it bound
+        }
+        else
+        {
+            const Mat4 model = matTRS(laneXw(lane), 0.0f, kZStrike, 1.12f);
+            meshProg->setUniformMat4("uModel", model.data(), 1, GL_FALSE);
+            meshProg->setUniform("uLaneColor", lc[0] * lum, lc[1] * lum, lc[2] * lum);
+            meshProg->setUniform("uCapColor", 0.055f, 0.055f, 0.075f);
+            meshProg->setUniform("uEmissive", pressAmount[lane] * 0.65f);
+            drawMesh(buttonMesh);
+            if (pressAmount[lane] > 0.03f)
+            {
+                const Mat4 capM = matTRS(laneXw(lane), 0.01f + 0.02f * pressAmount[lane], kZStrike,
+                                         1.0f, pressAmount[lane]);
+                meshProg->setUniformMat4("uModel", capM.data(), 1, GL_FALSE);
+                meshProg->setUniform("uEmissive", pressAmount[lane] * 0.9f);
+                drawMesh(capMesh);
+            }
         }
     }
 
@@ -685,15 +792,31 @@ void HighwayRenderer::renderOpenGL()
                 continue;
             const auto& lc = laneColours[lane];
             const float s = gem.legato ? 1.02f : 1.25f;
-            const Mat4 model = matTRS(laneXw(lane), 0.0f, z, s);
-            meshProg->setUniformMat4("uModel", model.data(), 1, GL_FALSE);
-            meshProg->setUniform("uLaneColor", lc[0], lc[1], lc[2]);
-            if (gem.legato)
-                meshProg->setUniform("uCapColor", 0.92f, 0.92f, 0.95f);  // HOPO: white ring
+            if (useYarg)
+            {
+                texMeshProg->use();
+                texMeshProg->setUniform("uTex", 0);
+                texMeshProg->setUniformMat4("uViewProj", vp.data(), 1, GL_FALSE);
+                texMeshProg->setUniform("uEye", eye[0], eye[1], eye[2]);
+                const Mat4 model = matTRS(laneXw(lane), 0.0f, z, s * kYargScale);
+                texMeshProg->setUniformMat4("uModel", model.data(), 1, GL_FALSE);
+                texMeshProg->setUniform("uTintColor", lc[0], lc[1], lc[2]);
+                texMeshProg->setUniform("uEmissive", gem.legato ? 0.18f : 0.06f);
+                drawModelAsset(yargGemModel);
+                meshProg->use();
+            }
             else
-                meshProg->setUniform("uCapColor", 0.055f, 0.055f, 0.075f);
-            meshProg->setUniform("uEmissive", 0.06f);
-            drawMesh(gemMesh);
+            {
+                const Mat4 model = matTRS(laneXw(lane), 0.0f, z, s);
+                meshProg->setUniformMat4("uModel", model.data(), 1, GL_FALSE);
+                meshProg->setUniform("uLaneColor", lc[0], lc[1], lc[2]);
+                if (gem.legato)
+                    meshProg->setUniform("uCapColor", 0.92f, 0.92f, 0.95f);  // HOPO: white ring
+                else
+                    meshProg->setUniform("uCapColor", 0.055f, 0.055f, 0.075f);
+                meshProg->setUniform("uEmissive", 0.06f);
+                drawMesh(gemMesh);
+            }
         }
     }
 

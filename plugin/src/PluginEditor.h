@@ -73,6 +73,11 @@ private:
     juce::ComboBox pedalBox, midiInBox;
     juce::Array<juce::MidiDeviceInfo> shownMidiIns;
 
+    // 3D highway gem/fret look: hand-built (default) or YARG-derived
+    // textured meshes -- see HighwayRenderer/ModelAsset
+    juce::Label modelStyleLabel;
+    juce::TextButton modelClassicBtn { "CLASSIC" }, modelYargBtn { "YARG" };
+
     // help overlay
     juce::TextButton helpCloseBtn { "X" }, moreBtn { "MORE HELP" };
 

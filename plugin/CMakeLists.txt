@@ -79,10 +79,19 @@ target_sources(GHMidi PRIVATE
     src/PluginEditor.cpp
     src/HighwayRenderer.cpp
     src/Theme.cpp
-    src/QuickBindPanel.cpp)
+    src/QuickBindPanel.cpp
+    src/ModelAsset.cpp)
 
+# assets/models/*.obj + *.png: YARG-derived (https://github.com/YARC-Official/YARG,
+# LGPL-3.0-or-later) gem/fret meshes and textures, converted once, offline,
+# by tools/model_convert/ -- see that tool and README.md for the credit /
+# conversion notes. Never re-converted at build time.
 juce_add_binary_data(GHMidiAssets SOURCES
-    assets/MetalMania-Regular.ttf)
+    assets/MetalMania-Regular.ttf
+    assets/models/yarg_fret.obj
+    assets/models/yarg_fret.png
+    assets/models/yarg_note.obj
+    assets/models/yarg_note.png)
 
 
 target_compile_definitions(GHMidi PRIVATE

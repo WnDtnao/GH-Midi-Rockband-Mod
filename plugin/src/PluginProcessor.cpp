@@ -271,6 +271,7 @@ void GuitarService::loadSettings()
         virtualMidiOn = get("virtualMidi", 1) != 0;
         strumSustain = get("strumSustain", 0) != 0;
         strumRollMs = juce::jlimit(0, 50, get("strumRoll", 10));
+        modelStyle = juce::jlimit(0, 1, get("modelStyle", 0));
         midiOutId = v["midiOutId"].toString();
         if (v["controllers"].isObject())
             controllersVar = v["controllers"];
@@ -313,6 +314,7 @@ void GuitarService::saveSettings()
     o->setProperty("virtualMidi", virtualMidiOn.load() ? 1 : 0);
     o->setProperty("strumSustain", strumSustain.load() ? 1 : 0);
     o->setProperty("strumRoll", strumRollMs.load());
+    o->setProperty("modelStyle", modelStyle.load());
     o->setProperty("midiOutId", currentMidiOutId());
     o->setProperty("controllers", controllersVar);
     o->setProperty("pedalVid", targetPedalVid.load());

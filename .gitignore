@@ -1,4 +1,5 @@
 plugin/build/
+tools/model_convert/build/
 release/*.zip
 release/GH-MIDI-v*/
 .venv/

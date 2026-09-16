@@ -121,6 +121,11 @@ public:
     std::atomic<bool> virtualMidiOn { true };
     std::atomic<bool> strumSustain { false }; // on: a note lasts while the strum BAR is held, not the fret
     std::atomic<int> strumRollMs { 10 };   // ms between rolled chord notes (0 = off)  // "GH MIDI" virtual source for DAW note recording
+    // 3D highway gem/fret look: the original hand-built meshes, or the
+    // YARG-derived textured ones (HighwayRenderer falls back to Classic if
+    // the YARG assets fail to load, so this is never a hard requirement)
+    enum ModelStyle { ModelClassic = 0, ModelYarg = 1 };
+    std::atomic<int> modelStyle { ModelClassic };
 
     // ---- state-restore requests (picked up by the guitar thread) ----
     std::atomic<int> modeRequest { -1 };

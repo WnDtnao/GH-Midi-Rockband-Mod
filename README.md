@@ -212,8 +212,22 @@ bridge) are kept for adapter debugging.
 The original plugin, README and user guide were made with Claude Code; so
 is this fork. Some details may be inaccurate; the code is the reference.
 
+## 3D model style
+
+SETTINGS → **3D model style** switches the highway's gem/fret look between
+the original hand-built meshes (CLASSIC) and a textured set derived from
+[YARG](https://github.com/YARC-Official/YARG) (YARG). The YARG meshes/
+textures were converted once, offline, by `tools/model_convert/` (never
+built as part of the main plugin, never linked into it) from YARG's own
+`Assets/Art/Meshes/Gameplay/{Frets,Notes}` FBX + `Assets/Art/Textures/
+Gameplay/{Frets,Notes}` PNG assets; the converted `.obj`/`.png` files are
+checked into `plugin/assets/models/` and embedded into the plugin exactly
+like the Metal Mania font already is.
+
 ## License
 
 AGPL-3.0 (JUCE is used under its AGPLv3 option), same as the original. The
 bundled Metal Mania font is by Open Window under the SIL Open Font License —
-see `plugin/assets/OFL-MetalMania.txt`.
+see `plugin/assets/OFL-MetalMania.txt`. The optional YARG 3D model style
+(above) derives from [YARG](https://github.com/YARC-Official/YARG) by
+YARC-Official, LGPL-3.0-or-later.
