@@ -138,6 +138,14 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     addChildComponent(rowTableViewport);
     rowTableViewport.setViewedComponent(&rowTableContent, false);
     rowTableViewport.setScrollBarsShown(true, false);   // vertical only, shown only when needed
+    for (auto* headerText : { "GUITAR", "ROCK BAND", "PEDAL (HID)", "PEDAL (MIDI)" })
+    {
+        auto* h = sectionHeaders.add(new juce::Label());
+        rowTableContent.addAndMakeVisible(h);
+        h->setText(headerText, juce::dontSendNotification);
+        h->setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+        h->setColour(juce::Label::textColourId, gold);
+    }
     for (int t = 0; t < GuitarService::LTargetCount; ++t)
     {
         auto* name = rowNames.add(new juce::Label());
@@ -572,17 +580,34 @@ void GHMidiEditor::resized()
     rowTableViewport.setBounds(bindArea);
     {
         const int rowH = 24;
-        rowTableContent.setSize(bindArea.getWidth() - rowTableViewport.getScrollBarThickness(),
-                                 rowNames.size() * rowH);
+        // section headers ahead of GUITAR/ROCK BAND/PEDAL (HID)/PEDAL (MIDI)
+        // groups -- see the constructor for where sectionHeaders is built
+        const int contentW = bindArea.getWidth() - rowTableViewport.getScrollBarThickness();
+        constexpr int headerH = 20;
+        int y = 0, headerIdx = 0;
+        auto maybeHeader = [&](int t)
+        {
+            if (t == 0 || t == GuitarService::LFretUpG || t == GuitarService::LPedalModeFwd
+                || t == GuitarService::LMidiPedalModeFwd)
+            {
+                if (headerIdx < sectionHeaders.size())
+                    sectionHeaders[headerIdx]->setBounds(2, y, contentW, headerH);
+                ++headerIdx;
+                y += headerH;
+            }
+        };
         for (int t = 0; t < rowNames.size(); ++t)
         {
-            auto row = juce::Rectangle<int>(0, t * rowH, rowTableContent.getWidth(), 22);
+            maybeHeader(t);
+            auto row = juce::Rectangle<int>(0, y, contentW, 22);
             rowNames[t]->setBounds(row.removeFromLeft(136));
             rowClear[t]->setBounds(row.removeFromRight(30).reduced(0, 1));
             row.removeFromRight(4);
             rowLearn[t]->setBounds(row.removeFromRight(62).reduced(0, 1));
             rowDescs[t]->setBounds(row);
+            y += rowH;
         }
+        rowTableContent.setSize(contentW, y);
     }
     r.removeFromTop(8);
     vmidiToggle.setBounds(r.removeFromTop(24));

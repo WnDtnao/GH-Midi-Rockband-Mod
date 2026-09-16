@@ -63,6 +63,10 @@ private:
     juce::Component rowTableContent;
     juce::OwnedArray<juce::Label> rowNames, rowDescs;
     juce::OwnedArray<juce::TextButton> rowLearn, rowClear;
+    // Rockband Mod: section headers ahead of GUITAR (t=0), ROCK BAND
+    // (LFretUpG), PEDAL/HID (LPedalModeFwd) and PEDAL/MIDI (LMidiPedalModeFwd)
+    // -- the flat 32-row list otherwise reads as one undifferentiated form
+    juce::OwnedArray<juce::Label> sectionHeaders;
 
     // Windows (or anywhere else with no OS-level virtual MIDI port): pick a
     // real output instead, e.g. a loopMIDI port. Hidden when

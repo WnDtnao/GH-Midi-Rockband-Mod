@@ -89,6 +89,13 @@ dropdown in SETTINGS — see the Windows build notes below.
 
 ## Building
 
+> **Just want to try it, not use it in a DAW?** Build for your platform below,
+> then run the **Standalone** app directly — it's a full, independent
+> program (not just a DAW plugin), useful for testing controller mappings
+> or just playing. `GHMIDI_DEMO=1` (as an environment variable) runs a
+> self-playing demo with no controller needed, to check the build works at
+> all first.
+
 ### macOS
 
 Requirements: macOS, CMake ≥ 3.24, Xcode command line tools. JUCE 8 and
