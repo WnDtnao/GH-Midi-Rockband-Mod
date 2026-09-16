@@ -54,6 +54,10 @@ private:
                     int mode, float p0x = 0, float p0z = 0, float p1x = 0, float p1z = 0,
                     int shape = -1, float wiggle = 0.0f);
     void saveSnapshotIfRequested(int wPx, int hPx);
+    // Rockband Mod: Practice mode -- notes from a loaded .chart/.mid file
+    // scrolling toward the strike line, reusing zForAge()'s existing travel
+    // curve (see HighwayRenderer.cpp) rather than the live-play gem meshes
+    void drawPracticeNotes(const float* viewProj);
 
     GHMidiProcessor& proc;
     juce::Component& host;

@@ -81,18 +81,71 @@ target_sources(GHMidi PRIVATE
     src/Theme.cpp
     src/QuickBindPanel.cpp
     src/ModelAsset.cpp
-    src/DebugPanel.cpp)
+    src/DebugPanel.cpp
+    src/AudioSfx.cpp
+    src/ChartFile.cpp)
 
 # assets/models/*.obj + *.png: YARG-derived (https://github.com/YARC-Official/YARG,
 # LGPL-3.0-or-later) gem/fret meshes and textures, converted once, offline,
 # by tools/model_convert/ -- see that tool and README.md for the credit /
 # conversion notes. Never re-converted at build time.
+# assets/sprites/rockband4/*.PNG: the RB4 Stratocaster QuickBind diagram --
+# a Background plus one same-canvas-size PNG per control, each showing just
+# that control highlighted. QuickBindPanel composites Background with
+# whichever control PNGs are relevant, alpha-driven by mapped/learning/live
+# state (see QuickBindPanel.cpp). Supplied directly by the project owner,
+# not sourced from a third party like the YARG models above.
+# assets/sfx/*.wav: Guitar Hero III sound effects (intro highway animation,
+# Standalone UI sounds -- see AudioSfx.cpp/HighwayRenderer.cpp), supplied
+# directly by the project owner. Unlike the YARG models above, these are not
+# under a license that permits redistribution -- the project owner was told
+# this plainly and chose to include them anyway.
 juce_add_binary_data(GHMidiAssets SOURCES
     assets/MetalMania-Regular.ttf
     assets/models/yarg_fret.obj
     assets/models/yarg_fret.png
     assets/models/yarg_note.obj
-    assets/models/yarg_note.png)
+    assets/models/yarg_note.png
+    assets/sprites/rockband4/Background.PNG
+    assets/sprites/rockband4/Dpad_left.PNG
+    assets/sprites/rockband4/Dpad_right.PNG
+    assets/sprites/rockband4/Fret_blue.PNG
+    assets/sprites/rockband4/Fret_green.PNG
+    assets/sprites/rockband4/Fret_orange.PNG
+    assets/sprites/rockband4/Fret_red.PNG
+    assets/sprites/rockband4/Fret_solo_blue.PNG
+    assets/sprites/rockband4/Fret_solo_green.PNG
+    assets/sprites/rockband4/Fret_solo_orange.PNG
+    assets/sprites/rockband4/Fret_solo_red.PNG
+    assets/sprites/rockband4/Fret_solo_yellow.PNG
+    assets/sprites/rockband4/Fret_yellow.PNG
+    assets/sprites/rockband4/Pause.PNG
+    assets/sprites/rockband4/Select.PNG
+    assets/sprites/rockband4/SoundEffect_bar.PNG
+    assets/sprites/rockband4/Strum_down.PNG
+    assets/sprites/rockband4/Strum_up.PNG
+    assets/sprites/rockband4/Tilt.PNG
+    assets/sprites/rockband4/WammyBar.PNG
+    assets/sfx/bad_note1.wav
+    assets/sfx/bad_note2.wav
+    assets/sfx/bad_note3.wav
+    assets/sfx/bad_note4.wav
+    assets/sfx/bad_note6.wav
+    assets/sfx/checkbox_off.wav
+    assets/sfx/checkbox_on.wav
+    assets/sfx/highway_rise.wav
+    assets/sfx/music_scroll.wav
+    assets/sfx/music_select.wav
+    assets/sfx/notes_ripple_up.wav
+    assets/sfx/song_failed.wav
+    assets/sfx/sp_available.wav
+    assets/sfx/sp_awarded1.wav
+    assets/sfx/sp_awarded2.wav
+    assets/sfx/sp_deployed.wav
+    assets/sfx/star_available.wav
+    assets/sfx/star_release.wav
+    assets/sfx/sudden_death.wav
+    assets/sfx/you_rock.wav)
 
 
 target_compile_definitions(GHMidi PRIVATE
@@ -105,6 +158,7 @@ target_link_libraries(GHMidi PRIVATE
     GHMidiAssets
     hidapi::hidapi
     juce::juce_audio_utils
+    juce::juce_audio_formats
     juce::juce_opengl
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)

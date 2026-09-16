@@ -18,6 +18,16 @@ constexpr int kVelDown = 100, kVelUp = 78;
 // CHART mode: Clone Hero / Rock Band PART GUITAR lanes, green..orange = base..base+4,
 // one base per difficulty (Easy, Medium, Hard, Expert). Every difficulty is written at once.
 constexpr int kChartLanes[4] = { 60, 72, 84, 96 };
+// Rockband Mod: open notes use the "note-based" convention (base-1, i.e.
+// 59/71/83/95) -- verified against thenathannator.github.io's
+// GuitarGame_ChartFormats spec, the same one that documents kChartLanes'
+// base note numbers above. Needs "Enhanced Opens" turned on for the 5-Fret
+// Guitar track when finishing the chart in Moonscraper (off by default
+// there, since note 59 normally doubles as a left-hand animation marker) --
+// acceptable since CHART mode already only records a rough chart per
+// README, cleaned up by hand afterward anyway; the SysEx-marker open-note
+// alternative is needless complexity for that workflow.
+constexpr int kChartOpenOffset = -1;
 // strum-sustain: a bar tap can be 20-30ms of contact, which as a MIDI note is
 // a click. The off is held back so a flick still sounds like a note.
 constexpr double kMinSustainS = 0.08;
@@ -132,6 +142,7 @@ static void varToMap(const juce::var& v, GuitarService::ControllerMap& m)
     btn("fretUpG", m.upperFrets[0]); btn("fretUpR", m.upperFrets[1]); btn("fretUpY", m.upperFrets[2]);
     btn("fretUpB", m.upperFrets[3]); btn("fretUpO", m.upperFrets[4]);
     btn("tilt", m.tilt);
+    btn("soloMod", m.soloMod);
     if (auto* a = v["whammy"].getArray(); a != nullptr && a->size() >= 3)
         m.whammy = { (int) (*a)[0], (int) (*a)[1], (int) (*a)[2] };
     auto stick = [&](const char* k, GuitarService::StickMap& sm)
@@ -157,6 +168,7 @@ static juce::var mapToVar(const GuitarService::ControllerMap& m)
     btn("fretUpG", m.upperFrets[0]); btn("fretUpR", m.upperFrets[1]); btn("fretUpY", m.upperFrets[2]);
     btn("fretUpB", m.upperFrets[3]); btn("fretUpO", m.upperFrets[4]);
     btn("tilt", m.tilt);
+    btn("soloMod", m.soloMod);
     o->setProperty("whammy", juce::Array<juce::var> { m.whammy.byteIdx, m.whammy.rest, m.whammy.extreme });
     o->setProperty("stickX", juce::Array<juce::var> { m.stickX.byteIdx, m.stickX.center, m.stickX.lo, m.stickX.hi });
     o->setProperty("stickY", juce::Array<juce::var> { m.stickY.byteIdx, m.stickY.center, m.stickY.lo, m.stickY.hi });
@@ -272,6 +284,7 @@ void GuitarService::loadSettings()
         virtualMidiOn = get("virtualMidi", 1) != 0;
         strumSustain = get("strumSustain", 0) != 0;
         strumRollMs = juce::jlimit(0, 50, get("strumRoll", 10));
+        hopoEnabled = get("hopo", 0) != 0;
         modelStyle = juce::jlimit(0, 1, get("modelStyle", 0));
         midiOutId = v["midiOutId"].toString();
         if (v["controllers"].isObject())
@@ -315,6 +328,7 @@ void GuitarService::saveSettings()
     o->setProperty("virtualMidi", virtualMidiOn.load() ? 1 : 0);
     o->setProperty("strumSustain", strumSustain.load() ? 1 : 0);
     o->setProperty("strumRoll", strumRollMs.load());
+    o->setProperty("hopo", hopoEnabled.load() ? 1 : 0);
     o->setProperty("modelStyle", modelStyle.load());
     o->setProperty("midiOutId", currentMidiOutId());
     o->setProperty("controllers", controllersVar);
@@ -383,6 +397,7 @@ void GuitarService::demoRun()
         { 0x10, false, 0.30, 0.10, "Dm" }, { 0x18, true,  0.55, 0.30, "F5" },
     };
     guitarFound = true;
+    introRevealed = true;   // no real Plus button to press in demo mode
     int i = 0;
     while (! threadShouldExit())
     {
@@ -712,6 +727,7 @@ juce::String GuitarService::targetName(int t)
                                    "MINUS BUTTON", "WHAMMY", "JOYSTICK LEFT/RIGHT", "JOYSTICK UP/DOWN",
                                    "UPPER GREEN FRET", "UPPER RED FRET", "UPPER YELLOW FRET",
                                    "UPPER BLUE FRET", "UPPER ORANGE FRET", "TILT SENSOR",
+                                   "SOLO MODIFIER",
                                    "PEDAL: NEXT MODE", "PEDAL: PREV MODE", "PEDAL: KEY UP", "PEDAL: KEY DOWN",
                                    "PEDAL: OCTAVE UP", "PEDAL: OCTAVE DOWN", "PEDAL: SUSTAIN TOGGLE",
                                    "MIDI PEDAL: NEXT MODE", "MIDI PEDAL: PREV MODE",
@@ -734,6 +750,7 @@ static GuitarService::ButtonMap* buttonSlot(GuitarService::ControllerMap& m, int
         case GuitarService::LFretUpB: case GuitarService::LFretUpO:
             return &m.upperFrets[t - GuitarService::LFretUpG];
         case GuitarService::LTilt: return &m.tilt;
+        case GuitarService::LSoloModifier: return &m.soloMod;
         default: return nullptr;
     }
 }
@@ -849,7 +866,7 @@ void GuitarService::learnTick(const uint8_t* d, int len, double now)
             if (b.byteIdx == i) return true;
         return map.strumDown.byteIdx == i || map.strumUp.byteIdx == i
             || map.plusBtn.byteIdx == i || map.minusBtn.byteIdx == i
-            || map.tilt.byteIdx == i;
+            || map.tilt.byteIdx == i || map.soloMod.byteIdx == i;
     };
 
     // buttons: LFretG..LMinus, plus the Rock Band upper frets + tilt
@@ -1207,9 +1224,23 @@ void GuitarService::step(const uint8_t* d, int len)
     // stays false), so everything below involving them is a strict no-op for
     // GH guitars -- zero regression risk.
     int comboUpper = 0;
-    for (int i = 0; i < 5; ++i)
-        if (pressed(m.upperFrets[i]))
-            comboUpper |= 1 << i;
+    if (m.soloMod.valid())
+    {
+        // shared-bit hardware: the upper/solo frets don't have their own
+        // bits -- holding the modifier reinterprets whatever lower frets are
+        // currently down as upper ones instead (see ControllerMap::soloMod)
+        if (pressed(m.soloMod))
+        {
+            comboUpper = combo;
+            combo = 0;
+        }
+    }
+    else
+    {
+        for (int i = 0; i < 5; ++i)
+            if (pressed(m.upperFrets[i]))
+                comboUpper |= 1 << i;
+    }
     const bool tiltOn = pressed(m.tilt);
     // an upper fret counts as "this colour is fretted" everywhere below (chord
     // selection, the chromatic index, release-gating, CHART lanes); comboUpper
@@ -1231,13 +1262,26 @@ void GuitarService::step(const uint8_t* d, int len)
         cycleMode(1);
     prevMinus = minusB;
 
-    // plus: tap through strum speeds (wraps back to 0)
+    // plus: tap through strum speeds (wraps back to 0) -- or, the first
+    // press ever, "press start" for the GH3-style intro instead (Rockband
+    // Mod): a controller is connected and sending real reports by
+    // construction, this is inside step()
     if (plusB && ! prevPlus)
     {
-        int roll = strumRollMs.load() + kStrumStepMs;
-        if (roll > kStrumMaxMs)
-            roll = 0;
-        setStrum(roll);
+        if (! introRevealed.load())
+        {
+            introRevealed = true;
+            introRevealAt = now;
+            strumLatchAt = -1.0;   // discard any pending latch from before reveal (see step()'s trigger gate)
+            playSfx(AudioSfx::HighwayRise);
+        }
+        else
+        {
+            int roll = strumRollMs.load() + kStrumStepMs;
+            if (roll > kStrumMaxMs)
+                roll = 0;
+            setStrum(roll);
+        }
     }
     prevPlus = plusB;
 
@@ -1256,6 +1300,7 @@ void GuitarService::step(const uint8_t* d, int len)
             bits |= 1 << LStickY;
         bits |= comboUpper << LFretUpG;
         if (tiltOn) bits |= 1 << LTilt;
+        if (m.soloMod.valid() && pressed(m.soloMod)) bits |= 1 << LSoloModifier;
         uiButtonBits = bits;   // whammy bit added below
     }
 
@@ -1331,16 +1376,45 @@ void GuitarService::step(const uint8_t* d, int len)
     for (int i = 4; i >= 0; --i)
         if (combo & (1 << i)) { topFretNow = i; break; }
 
+    bool triggerNow = false;
+    int triggerVel = kVelDown;
+    // Rockband Mod: no notes until the GH3-style intro is revealed (see the
+    // plus-handling above) -- everything else in step() (HUD/live-bits,
+    // LEARN's byte stream, joystick/whammy) keeps working before that, only
+    // the actual note-triggering is held back
+    if (introRevealed.load())
+    {
     if (strumLatchAt >= 0.0 && now - strumLatchAt >= 0.010)
     {
         strumLatchAt = -1.0;
-        const int strumTopFret = topFretNow;
         // ghost-pulse filter: a real strum is still engaged 10ms after its
         // edge; a one-report glitch (whammy leaking onto the strum contacts)
         // has already vanished by now
         if (latchDown ? down : up)
         {
-            const int vel = latchVel;
+            triggerNow = true;
+            triggerVel = latchVel;
+        }
+    }
+    // Rockband Mod: HOPO (hammer-on/pull-off) -- a fret change while a note
+    // is already ringing plays through without a fresh strum, same as a
+    // real guitar/Rock Band controller. There's no authored chart here to
+    // check timing against (unlike a HOPO flag in a .chart file) -- "is
+    // anything currently ringing" is the live-input equivalent, and it
+    // covers pull-offs to open the same way every mode's open note already
+    // works off combo == 0.
+    if (! triggerNow && hopoEnabled.load() && ! ringing.isEmpty() && combo != lastTriggerCombo)
+    {
+        triggerNow = true;
+        triggerVel = kVelUp;   // hammer-ons/pull-offs read softer than a picked strum
+    }
+    }   // introRevealed
+    {
+        const int strumTopFret = topFretNow;
+        if (triggerNow)
+        {
+            const int vel = triggerVel;
+            lastTriggerCombo = combo;
             allOff();
             candCombo = -1;
             sustainOnAt = now;
@@ -1431,7 +1505,8 @@ void GuitarService::step(const uint8_t* d, int len)
                     announce(noteName(pn));
                 }
             }
-            else  // CHART: the held frets as Clone Hero lane notes, no roll; an open strum charts nothing
+            else  // CHART: the held frets as Clone Hero lane notes, no roll;
+                   // an open strum charts each difficulty's open-note number
             {
                 if (combo != 0)
                 {
@@ -1442,6 +1517,14 @@ void GuitarService::step(const uint8_t* d, int len)
                     chartHeld = combo;
                     beginGem(combo, false);
                     announceFrets(combo);
+                }
+                else
+                {
+                    for (int base : kChartLanes)
+                        noteOn(base + kChartOpenOffset, vel);
+                    chartOpenHeld = true;
+                    beginGem(0, false);
+                    announce("OPEN");
                 }
             }
         }
@@ -1529,7 +1612,9 @@ void GuitarService::step(const uint8_t* d, int len)
                 allOff();   // open root follows the bar
         }
     }
-    else  // CHART: a lane note lasts exactly while its fret is held
+    else  // CHART: a lane note lasts exactly while its fret is held; the
+          // open note lasts exactly while the strum bar is held, like every
+          // other mode's open note
     {
         if (chartHeld != 0)
         {
@@ -1543,9 +1628,18 @@ void GuitarService::step(const uint8_t* d, int len)
                     }
                     chartHeld &= ~(1 << i);
                 }
-            if (chartHeld == 0)
-                endGem();
         }
+        if (chartOpenHeld && ! strum)
+        {
+            for (int base : kChartLanes)
+            {
+                sendMsg(juce::MidiMessage::noteOff(1, base + kChartOpenOffset));
+                ringing.removeValue(base + kChartOpenOffset);
+            }
+            chartOpenHeld = false;
+        }
+        if (chartHeld == 0 && ! chartOpenHeld)
+            endGem();
     }
 
 }
@@ -1566,11 +1660,18 @@ void GHMidiProcessor::prepareToPlay(double sampleRate, int)
 {
     collector.reset(sampleRate);
     service->addClient(&collector);
+    service->sfxEngine().prepareToPlay(sampleRate);
 }
 
 void GHMidiProcessor::processBlock(juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi)
 {
     audio.clear();
+    // Standalone-only sound effects (intro highway-rise, menu/checkbox
+    // sounds) -- mixed straight into this app's own speaker output. A VST3
+    // hosted in a DAW must not add uninvited audio to the host's mix, same
+    // reasoning as the MIDI input guard in GuitarService::applyMidiInput.
+    if (juce::JUCEApplicationBase::isStandaloneApp())
+        service->sfxEngine().render(audio);
     // VST3 pedal-as-MIDI-controller path: the host routes a pedal's MIDI
     // here instead of GuitarService opening a system MIDI input itself
     // (which only the Standalone app does -- see GuitarService::applyMidiInput).

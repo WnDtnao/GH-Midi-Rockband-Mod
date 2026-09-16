@@ -29,14 +29,15 @@ const juce::String arrowNE(juce::CharPointer_UTF8("\xE2\x86\x97"));  // north-ea
 
 juce::Rectangle<int> panelBounds(int W, int H)
 {
-    // +150 tall vs. the original 500x480: the QuickBind DIAGRAM/TABLE toggle
+    // +180 tall vs. the original 500x480: the QuickBind DIAGRAM/TABLE toggle
     // row, a fixed-height bind area (diagram aspect-fits, table scrolls --
     // neither needs to grow with LTargetCount, so this height doesn't
-    // either), the Windows real-MIDI-output row, the two pedal rows (HID
-    // device + MIDI input), and the 3D model style row. (This panel's row
-    // count has grown across every milestone so far -- Phase G's settings
-    // reorganization is where this stops being "just add another row".)
-    return { W / 2 - 250, H / 2 - 315, 500, 630 };
+    // either), the HOPO toggle, the Windows real-MIDI-output row, the two
+    // pedal rows (HID device + MIDI input), and the 3D model style row.
+    // (This panel's row count has grown across every milestone so far --
+    // Phase G's settings reorganization is where this stops being "just add
+    // another row".)
+    return { W / 2 - 250, H / 2 - 330, 500, 660 };
 }
 juce::Rectangle<int> helpBounds(int W, int H)
 {
@@ -62,7 +63,12 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     context.attachTo(*this);
 
     addAndMakeVisible(gearBtn);
-    gearBtn.onClick = [this] { setHelpVisible(false); setPanelVisible(! panelOpen); };
+    gearBtn.onClick = [this]
+    {
+        setHelpVisible(false);
+        setPanelVisible(! panelOpen);
+        proc.guitar().playSfx(AudioSfx::MusicSelect);
+    };
     addAndMakeVisible(helpBtn);
     helpBtn.onClick = [this] { setPanelVisible(false); setHelpVisible(! helpOpen); };
     addAndMakeVisible(debugBtn);
@@ -256,7 +262,42 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     {
         proc.guitar().virtualMidiOn = vmidiToggle.getToggleState();
         proc.guitar().requestSave();
+        proc.guitar().playSfx(vmidiToggle.getToggleState() ? AudioSfx::CheckboxOn : AudioSfx::CheckboxOff);
     };
+    addChildComponent(hopoToggle);
+    hopoToggle.onClick = [this]
+    {
+        proc.guitar().hopoEnabled = hopoToggle.getToggleState();
+        proc.guitar().requestSave();
+        proc.guitar().playSfx(hopoToggle.getToggleState() ? AudioSfx::CheckboxOn : AudioSfx::CheckboxOff);
+    };
+    // Practice mode (Rockband Mod, MVP scope -- see README)
+    initLabel(practiceLabel, "(no song loaded)", 0.55f);
+    practiceLabel.setFont(juce::Font(juce::FontOptions(11.0f)));
+    addChildComponent(loadSongBtn);
+    loadSongBtn.onClick = [this]
+    {
+        songChooser = std::make_unique<juce::FileChooser>(
+            "Load a song for Practice mode", juce::File(), "*.chart;*.mid;*.midi");
+        songChooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& fc)
+            {
+                const auto f = fc.getResult();
+                if (f.existsAsFile())
+                {
+                    proc.guitar().loadPracticeSong(f);
+                    refreshPracticeLabel();
+                }
+            });
+    };
+    addChildComponent(practicePlayBtn);
+    practicePlayBtn.onClick = [this]
+    {
+        auto& svc = proc.guitar();
+        svc.setPracticePlaying(! svc.isPracticePlaying());
+        proc.guitar().playSfx(AudioSfx::MusicSelect);
+    };
+
     addChildComponent(closeBtn);
     closeBtn.onClick = [this]
     {
@@ -278,7 +319,7 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     if (auto* env = std::getenv("GHMIDI_HUDSNAP"); env != nullptr && juce::JUCEApplicationBase::isStandaloneApp())
         hudSnapDir = env;
 
-    setSize(720, 730);
+    setSize(1280, 720);   // 16:9 -- was a near-square 720x730
     startTimerHz(30);
 }
 
@@ -307,10 +348,11 @@ void GHMidiEditor::setPanelVisible(bool visible)
     for (auto* c : { (juce::Component*) &sustainLabel, (juce::Component*) &sustainFretBtn, (juce::Component*) &sustainStrumBtn })
         c->setVisible(! visible && ! helpOpen);
     for (auto* c : std::initializer_list<juce::Component*> {
-             &deviceLabel, &deviceBox, &rescanBtn, &vmidiToggle,
+             &deviceLabel, &deviceBox, &rescanBtn, &vmidiToggle, &hopoToggle,
              &closeBtn, &diagramBtn, &tableBtn,
              &pedalLabel, &pedalBox, &midiInLabel, &midiInBox,
-             &modelStyleLabel, &modelClassicBtn, &modelYargBtn })
+             &modelStyleLabel, &modelClassicBtn, &modelYargBtn,
+             &practiceLabel, &loadSongBtn, &practicePlayBtn })
         c->setVisible(visible);
     // Windows (or anywhere else a virtual MIDI port couldn't be created):
     // show the real-output picker. Runtime check, not #ifdef.
@@ -322,11 +364,13 @@ void GHMidiEditor::setPanelVisible(bool visible)
     {
         proc.guitar().requestDeviceScan();
         vmidiToggle.setToggleState(proc.guitar().virtualMidiOn.load(), juce::dontSendNotification);
+        hopoToggle.setToggleState(proc.guitar().hopoEnabled.load(), juce::dontSendNotification);
         refreshMappingRows();
         refreshPedalBox();
         refreshMidiInBox();
         if (showMidiOut)
             refreshMidiOutBox();
+        refreshPracticeLabel();
     }
     else
         proc.guitar().cancelLearn();
@@ -453,6 +497,27 @@ void GHMidiEditor::refreshMappingRows()
         rowDescs[t]->setText(proc.guitar().describeMapping(t), juce::dontSendNotification);
 }
 
+void GHMidiEditor::refreshPracticeLabel()
+{
+    auto& svc = proc.guitar();
+    const bool playing = svc.isPracticePlaying();
+    practicePlayBtn.setButtonText(playing ? "STOP" : "PLAY");
+    practicePlayBtn.setEnabled(svc.hasPracticeSong());
+    if (! svc.hasPracticeSong())
+    {
+        practiceLabel.setText("(no song loaded)", juce::dontSendNotification);
+        return;
+    }
+    juce::String s = svc.practiceSongTitle();
+    if (playing)
+    {
+        const int elapsed = juce::jmax(0, (int) svc.practicePlayheadSecs());
+        const int total = (int) svc.practiceSongLengthSecs();
+        s << juce::String::formatted("  %d:%02d / %d:%02d", elapsed / 60, elapsed % 60, total / 60, total % 60);
+    }
+    practiceLabel.setText(s, juce::dontSendNotification);
+}
+
 void GHMidiEditor::timerCallback()
 {
     syncSustainButtons();   // cheap, and keeps the pair honest after a state restore
@@ -485,6 +550,7 @@ void GHMidiEditor::timerCallback()
     updateHudButtons();
     if (panelOpen)
     {
+        refreshPracticeLabel();
         auto& svc = proc.guitar();
         if (svc.getDeviceListVersion() != lastDevVersion)
         {
@@ -499,7 +565,10 @@ void GHMidiEditor::timerCallback()
         const int liveBits = svc.uiButtonBits.load();
         for (int t = 0; t < rowNames.size(); ++t)
         {
-            const bool lit = (liveBits & (1 << t)) != 0;
+            // uiButtonBits only ever populates guitar/Rock Band target bits
+            // (t < 31); guard the shift so LTargetCount growing past 32
+            // (e.g. LSoloModifier) can never shift by >= the int's width
+            const bool lit = t < 31 && (liveBits & (1 << t)) != 0;
             rowNames[t]->setColour(juce::Label::backgroundColourId,
                                    lit ? gold.withAlpha(0.22f) : juce::Colours::transparentBlack);
             rowDescs[t]->setColour(juce::Label::textColourId,
@@ -575,7 +644,7 @@ void GHMidiEditor::resized()
     // height, independent of LTargetCount: the table scrolls, the diagram
     // aspect-fits, so neither needs the panel to grow as more targets
     // (Rock Band, then pedals) are added.
-    auto bindArea = r.removeFromTop(300);
+    auto bindArea = r.removeFromTop(240);
     quickBind.setBounds(bindArea);
     rowTableViewport.setBounds(bindArea);
     {
@@ -612,6 +681,8 @@ void GHMidiEditor::resized()
     r.removeFromTop(8);
     vmidiToggle.setBounds(r.removeFromTop(24));
     r.removeFromTop(6);
+    hopoToggle.setBounds(r.removeFromTop(24));
+    r.removeFromTop(6);
     {
         auto midiRow = r.removeFromTop(24);
         midiOutLabel.setBounds(midiRow.removeFromLeft(76));
@@ -636,6 +707,15 @@ void GHMidiEditor::resized()
         modelClassicBtn.setBounds(modelRow.removeFromLeft(84).reduced(1, 0));
         modelYargBtn.setBounds(modelRow.removeFromLeft(84).reduced(1, 0));
     }
+    r.removeFromTop(6);
+    {
+        auto songRow = r.removeFromTop(24);
+        practicePlayBtn.setBounds(songRow.removeFromRight(72));
+        songRow.removeFromRight(6);
+        loadSongBtn.setBounds(songRow.removeFromLeft(120));
+    }
+    r.removeFromTop(4);
+    practiceLabel.setBounds(r.removeFromTop(16));
 
     // help overlay
     auto hb = helpBounds(getWidth(), getHeight());
@@ -704,8 +784,10 @@ void GHMidiEditor::paint(juce::Graphics& g)
     // MODE / STRUM / KEY / OCTAVE plate: current settings, arrows either side (buttons)
     {
         const auto plate = hudPlate(getWidth(), getHeight());
-        g.setColour(juce::Colour(0x8810101a));
-        g.fillRoundedRectangle(plate.toFloat(), 6.0f);
+        g.setColour(Theme::panelBg.withAlpha(0.85f));
+        g.fillRoundedRectangle(plate.toFloat(), Theme::panelCornerRadius);
+        g.setColour(Theme::panelBorder);
+        g.drawRoundedRectangle(plate.toFloat(), Theme::panelCornerRadius, 1.0f);
         const int mode = proc.guitar().uiMode.load() % 4;
         const int uiK = proc.guitar().uiKey.load() % 12;
         const bool notes = mode == 1;
@@ -763,15 +845,26 @@ void GHMidiEditor::paint(juce::Graphics& g)
                            : "ADAPTER CAN'T SEE THE GUITAR - unplug USB, reseat plug, replug",
                    0, (int) (H * 0.46f), getWidth(), 28, juce::Justification::centred);
     }
+    else if (! proc.guitar().introRevealed.load() && ! panelOpen && ! helpOpen)
+    {
+        // Rockband Mod: GH3-style intro -- the highway stays hidden (see
+        // HighwayRenderer) until this first press
+        g.setColour(Theme::panelBg);
+        g.fillRoundedRectangle(24.0f, H * 0.46f, W - 48.0f, 28.0f, 6.0f);
+        g.setColour(gold);
+        g.setFont(juce::Font(juce::FontOptions(14.0f, juce::Font::bold)));
+        g.drawText("PRESS PLUS (OR PAUSE) ON YOUR GUITAR TO START",
+                   0, (int) (H * 0.46f), getWidth(), 28, juce::Justification::centred);
+    }
 
     auto drawOverlayFrame = [&](juce::Rectangle<float> pb, const juce::String& title)
     {
         g.setColour(juce::Colours::black.withAlpha(0.55f));
         g.fillAll();
-        g.setColour(juce::Colour(0xf2151520));
-        g.fillRoundedRectangle(pb, 10.0f);
-        g.setColour(juce::Colours::white.withAlpha(0.25f));
-        g.drawRoundedRectangle(pb, 10.0f, 1.5f);
+        g.setColour(Theme::panelBg);
+        g.fillRoundedRectangle(pb, Theme::panelCornerRadius);
+        g.setColour(Theme::panelBorder);
+        g.drawRoundedRectangle(pb, Theme::panelCornerRadius, 1.0f);
         g.setColour(juce::Colours::white.withAlpha(0.9f));
         g.setFont(ghFont(24.0f));
         g.drawText(title, (int) pb.getX() + 20, (int) pb.getY() + 12,

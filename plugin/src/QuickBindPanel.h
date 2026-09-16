@@ -3,15 +3,15 @@
 #pragma once
 #include "PluginProcessor.h"
 
-// QuickBind: a vector-drawn guitar diagram with one clickable hotspot per
-// mappable control, so binding a controller is "click the picture of the
-// button, then press it" instead of working down the text row table one
-// control at a time. This is purely a new view over GuitarService's existing
-// LEARN engine -- clicking a hotspot calls the exact same startLearn() /
+// QuickBind: the RB4 Stratocaster diagram (assets/sprites/rockband4, this
+// mod's own art -- see README) with one clickable hotspot per mappable
+// control, so binding a controller is "click the picture of the button,
+// then press it" instead of working down the text row table one control at
+// a time. This is purely a new view over GuitarService's existing LEARN
+// engine -- clicking a hotspot calls the exact same startLearn()/
 // cancelLearn() the row table's LEARN buttons already call, and mapped/live
-// state is read from the exact same describeMapping() / uiButtonBits the row
-// table already reads. No engine changes needed for the GH control set this
-// draws today.
+// state is read from the exact same describeMapping()/uiButtonBits the row
+// table already reads.
 class QuickBindPanel : public juce::Component
 {
 public:
@@ -25,19 +25,23 @@ private:
     struct Hotspot
     {
         int target = -1;
-        juce::Path shape;         // built once, in virtual-canvas space
-        juce::Path screenShape;   // resized(): shape transformed into component bounds
-        juce::String label;
+        juce::Image sprite;                  // full-canvas overlay PNG; invalid = no art, draw the fallback pill instead
+        juce::Rectangle<float> bounds;        // native canvas space: opaque-pixel bbox for a sprite, or a laid-out pill rect for the fallback
+        juce::Rectangle<float> screenBounds;  // resized(): bounds transformed into component space
+        juce::String label;                   // fallback pill text only -- sprite targets don't need a label to draw
     };
 
-    void buildHotspots();    // virtual-canvas space, called once from the constructor
+    void buildHotspots();    // loads images, computes bboxes; called once from the constructor
     void layoutHotspots();   // resized(): aspect-fit the canvas into the component bounds
     int hotspotAt(juce::Point<float>) const;
     void drawHotspot(juce::Graphics&, const Hotspot&, bool learning, bool mapped, bool live) const;
+    static juce::Rectangle<float> opaqueBounds(const juce::Image&);   // one-time pixel scan per sprite, for its click region
 
     GHMidiProcessor& proc;
     juce::Array<Hotspot> hotspots;
-    juce::Path bodyOutline, bodyOutlineScreen;
+    juce::Image background;
+    float canvasW = 1.0f, canvasH = 1.0f;              // background's native size, plus room for the fallback pill row below it
+    juce::Rectangle<float> canvasScreenBounds;          // resized(): the whole canvas's transformed rect
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(QuickBindPanel)
 };

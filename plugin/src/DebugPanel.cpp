@@ -52,10 +52,10 @@ void DebugPanel::drawByteGrid(juce::Graphics& g, juce::Rectangle<int> area, cons
 
 void DebugPanel::paint(juce::Graphics& g)
 {
-    g.setColour(juce::Colour(0xd0101018));
-    g.fillRoundedRectangle(getLocalBounds().toFloat(), 8.0f);
-    g.setColour(juce::Colours::white.withAlpha(0.2f));
-    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), 8.0f, 1.0f);
+    g.setColour(Theme::panelBg);
+    g.fillRoundedRectangle(getLocalBounds().toFloat(), Theme::panelCornerRadius);
+    g.setColour(Theme::panelBorder);
+    g.drawRoundedRectangle(getLocalBounds().toFloat().reduced(0.5f), Theme::panelCornerRadius, 1.0f);
 
     auto& svc = proc.guitar();
     auto r = getLocalBounds().reduced(10);

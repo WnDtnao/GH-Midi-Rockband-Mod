@@ -35,6 +35,17 @@ through strum speeds, the joystick changes key (left/right) and octave
 (up/down, ±3 octaves in every mode) — and on-screen arrows do all four for
 controllers without a joystick.
 
+## Intro
+
+The highway stays dark until a controller is connected and you press
+**Plus** (or **Pause**, same button, most Rock Band guitars label it that)
+once — a GH3-style camera swoop into the play position, with a rise sound.
+Nothing plays before that first press either; everything else (SETTINGS,
+LEARN, the row table's live-bit highlighting) works normally while you wait,
+so you can map a fresh controller before ever pressing start.
+`GHMIDI_DEMO=1` skips this — there's no real button to press when nothing's
+plugged in.
+
 ## Rock Band guitars
 
 Standard Rock Band guitars (Xplorer/Stratocaster-style, RB1/RB2/RB4) add an
@@ -44,6 +55,20 @@ whatever you strike up an octave, layered on top of what the lower frets
 already produce: two octaves of range in CHORDS/NOTES/SOLO without ever
 touching the joystick's octave nudge. (RB3's 102-button Pro Guitar neck is
 not supported — a different, far more involved protocol.)
+
+Some Rock Band guitars don't give the upper/solo frets their own bits at
+all — the same colour bit fires whether you fret low or high on the neck,
+and a single shared bit elsewhere in the report is the only thing marking
+"this press is on the solo row" (confirmed on a real controller via the
+DEBUG byte grid). If LEARNing the 5 upper frets individually doesn't work on
+your guitar, LEARN **SOLO MODIFIER** instead (one control, press any
+solo-row fret once) — the engine then reinterprets whatever lower frets are
+held as upper ones while that bit is down, instead of needing 5 independent
+bits that hardware doesn't have.
+
+**HOPO** (hammer-on/pull-off): SETTINGS has a toggle to let a fret change
+play through without a fresh strum, whenever a note is already ringing —
+same as a real guitar. Off by default.
 
 ## Pedals
 
@@ -67,14 +92,16 @@ is a possible future addition, not built yet.
 
 ## QuickBind
 
-Open **SETTINGS** and you land on the **DIAGRAM** view: a picture of the
-guitar — lower frets, and the Rock Band upper-fret row + tilt pad above
-them — with one clickable button per control. Click a button on the
-diagram, then press (or sweep, for the whammy/joystick) that control on
-your controller — same LEARN engine as before, just click-the-picture
-instead of reading down a text list one row at a time. The old row-by-row
-**TABLE** view is still there next to it (scrollable — it's grown to 32
-rows across the guitar, Rock Band, and pedal controls; handy for unusual
+Open **SETTINGS** and you land on the **DIAGRAM** view: a photo of an RB4
+Stratocaster guitar, lit up one control at a time as you map it — click a
+control on the diagram, then press (or sweep, for the whammy/joystick) that
+control on yours — same LEARN engine as before, just click-the-picture
+instead of reading down a text list one row at a time. Every control with a
+natural spot on the photo uses it (frets, solo frets, strum, tilt, whammy,
+plus/minus); the joystick axes and the solo modifier (above) don't have one,
+so those three stay small text pills under the diagram. The old row-by-row
+**TABLE** view is still there next to it (scrollable — it's grown to 33 rows
+across the guitar, Rock Band, and pedal controls; handy for unusual
 controllers too), and both stay in sync with each other.
 
 **No DAW required.** The release also ships a standalone app: while it runs,
@@ -86,6 +113,19 @@ The plugin also publishes a virtual MIDI source ("GH MIDI") so DAWs record
 your performance as editable notes. On Windows, which has no OS-level
 virtual MIDI port, pick a real MIDI output instead from the new **MIDI out**
 dropdown in SETTINGS — see the Windows build notes below.
+
+## Sounds
+
+The **Standalone app only** (never the VST3 — a plugin shouldn't add
+uninvited audio to its host's mix) plays a handful of Guitar Hero III sound
+effects: the intro highway-rise (above), and a click for checkbox/menu
+interactions in SETTINGS. A further batch (Star Power cues, a wrong-note
+buzz, a song-failed stinger, "You Rock") ships alongside them, embedded but
+not wired to anything yet — reserved for if/when the practice-along mode
+below grows scoring.
+
+These clips are not under a license that permits redistribution, unlike the
+YARG assets above — see [License](#license).
 
 ## Building
 
@@ -179,10 +219,23 @@ to take effect. The VST3 typically goes in `~/.vst3/`.
 
 - **Cross-platform**: builds and runs on Windows and Linux, in addition to
   the original's macOS.
-- **QuickBind**: click-the-picture control mapping (above).
-- **Rock Band guitar support**: upper-fret row + tilt sensor (above).
+- **QuickBind**: click-the-picture control mapping, now a real photo diagram
+  (above).
+- **Rock Band guitar support**: upper-fret row + tilt sensor, plus a solo
+  modifier for guitars that share bits between the two fret rows (above).
 - **Pedal support**: a second HID device and/or a MIDI input fire 7
   performance actions instead of playing notes (above).
+- **HOPO**: hammer-on/pull-off without a fresh strum, optional (above).
+- **GH3-style intro**: the highway stays hidden until you press start
+  (above).
+- **Sounds**: Standalone-only UI/intro sound effects (above).
+- **16:9 window**, and a flatter, more Windows-native look and default
+  system font in place of the original's rounded dark-glass panels and
+  Metal Mania display face (still bundled, still used for the on-stage "GH"
+  wordmark).
+- A practice-along mode that scrolls a `.chart`/`.mid` file's notes down the
+  existing highway while you play along on your own controller — no
+  scoring/Star Power/pass-fail yet, see [Practice mode](#practice-mode).
 - Own product identity ("GH MIDI Rockband Mod", its own VST3 plugin/bundle
   ID) so this can be installed side by side with the original GH MIDI
   without a naming or plugin-ID clash. Settings are also stored separately,
@@ -191,10 +244,17 @@ to take effect. The VST3 typically goes in `~/.vst3/`.
   has no virtual MIDI ports — the original author's own README already
   flagged this gap; this fork fills it with a loopMIDI-compatible picker
   rather than requiring a bundled driver.
+- **Fixed**: the upper/solo frets not registering on controllers that share
+  bits between the two fret rows (see the solo modifier, above); open notes
+  missing a hold texture on the highway; CHART mode not recording open
+  strums.
 
 **Not built yet:** a pedal-controlled audio effects chain (distortion/wah-
 style tone shaping) — a bigger, more open-ended addition since the plugin
-doesn't process audio at all today (it only ever produces MIDI).
+doesn't process the audio bus at all today (it only ever produces MIDI, plus
+now some Standalone-only one-shot SFX playback, see [Sounds](#sounds)); the
+practice-along mode's scoring/Star Power/audio-sync (see
+[Practice mode](#practice-mode)).
 
 Modified under AGPL-3.0 §5(a) ("you must cause the modified files to carry
 prominent notices stating that you changed the files"); files substantially
@@ -226,6 +286,23 @@ Gameplay/{Frets,Notes}` PNG assets; the converted `.obj`/`.png` files are
 checked into `plugin/assets/models/` and embedded into the plugin exactly
 like the Metal Mania font already is.
 
+## Practice mode
+
+SETTINGS → **LOAD SONG...** opens a `.chart` (Moonscraper/Clone Hero) or
+`.mid` file; **PLAY** scrolls its notes down the existing highway from the
+top, same lane colours as everything else, so you can play along on your
+own controller for practice or just for fun. This is a **first pass, not a
+full rhythm-game mode**: no scoring, no Star Power, no pass/fail, no audio
+track played alongside it (the notes are the whole show) — Play always
+restarts from the top, there's no pause/resume/seek yet. `.chart` is the
+primary, better-tested path (parsed directly, tick timing verified against
+[TheNathannator's GuitarGame_ChartFormats](https://github.com/TheNathannator/GuitarGame_ChartFormats)
+spec); `.mid` support reads whichever 5-fret-guitar difficulty track it
+finds, via the same note convention as this plugin's own CHART mode output
+(see [Changes from the original](#changes-from-the-original)), so a chart
+you record in CHART mode and clean up in Moonscraper can be loaded straight
+back in here afterward.
+
 ## License
 
 AGPL-3.0 (JUCE is used under its AGPLv3 option), same as the original. The
@@ -233,3 +310,14 @@ bundled Metal Mania font is by Open Window under the SIL Open Font License —
 see `plugin/assets/OFL-MetalMania.txt`. The optional YARG 3D model style
 (above) derives from [YARG](https://github.com/YARC-Official/YARG) by
 YARC-Official, LGPL-3.0-or-later.
+
+The [Sounds](#sounds) (`plugin/assets/sfx/`) and the QuickBind diagram
+(`plugin/assets/sprites/`) are a different situation: the sound effects are
+sourced from the original Guitar Hero III, owned by Activision, under no
+license that permits redistribution. They're included in this repository at
+the project owner's explicit direction, made with full knowledge that this
+is a copyright grey area for a publicly-distributed mod — unlike everything
+else listed above, which is either original work or used under a license
+that actually allows it. Anyone redistributing this project further should
+weigh that themselves rather than assume it's cleared the way the rest of
+this file's credits are.
