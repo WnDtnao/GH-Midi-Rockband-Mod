@@ -14,55 +14,38 @@ QuickBindPanel::QuickBindPanel(GHMidiProcessor& processorToUse) : proc(processor
 
 void QuickBindPanel::buildHotspots()
 {
-    bodyOutline.addRoundedRectangle(10.0f, 10.0f, 300.0f, 350.0f, 24.0f);
+    // Rockband Mod (2026): plain text-label pills, an explicit placeholder
+    // until real sprite art exists (see README.md's QuickBind section) --
+    // this replaced a guitar-shaped diagram of coloured vector shapes
+    // (circles for frets, a whammy-bar pill, etc.) with a simple uniform
+    // grid of labelled buttons showing each control's full name. Same
+    // hotspotAt()/mouseDown()/LEARN wiring as before, only the drawing and
+    // layout changed.
+    constexpr int cols = 3;
+    constexpr float cellW = 112.0f, cellH = 30.0f, gapX = 6.0f, gapY = 6.0f;
+    constexpr float startX = 6.0f, startY = 6.0f;
 
-    auto addCircle = [this](int target, float cx, float cy, float r, const juce::String& label)
+    int col = 0, row = 0;
+    // QuickBind covers the guitar-shaped controls only (frets, strum,
+    // whammy, joystick, plus/minus, Rock Band upper frets + tilt); pedal
+    // targets are row-table only (see README.md) -- LPedalModeFwd is where
+    // the guitar/Rock Band targets end
+    for (int t = 0; t < GuitarService::LPedalModeFwd; ++t)
     {
         Hotspot hs;
-        hs.target = target;
-        hs.shape.addEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f);
-        hs.label = label;
+        hs.target = t;
+        hs.label = GuitarService::targetName(t);
+        const float x = startX + (float) col * (cellW + gapX);
+        const float y = startY + (float) row * (cellH + gapY);
+        hs.shape.addRoundedRectangle(x, y, cellW, cellH, 6.0f);
         hotspots.add(hs);
-    };
-    auto addRect = [this](int target, float x, float y, float w, float h, float corner, const juce::String& label)
-    {
-        Hotspot hs;
-        hs.target = target;
-        hs.shape.addRoundedRectangle(x, y, w, h, corner);
-        hs.label = label;
-        hotspots.add(hs);
-    };
+        if (++col >= cols) { col = 0; ++row; }
+    }
 
-    // fret x positions, green..orange -- matches Theme::gemColours / the
-    // "GRYBO" order used elsewhere (e.g. GuitarService::announceFrets)
-    const float fretX[5] = { 64.0f, 120.0f, 176.0f, 232.0f, 288.0f };
-    const char* fretLabel[5] = { "G", "R", "Y", "B", "O" };
-
-    // Rock Band standard guitars only: an upper-fret row (same colours,
-    // same order) above the usual lower row. Unlabelled as "upper" -- row
-    // position plus colour already says which is which, same idea as the
-    // guitar itself.
-    for (int i = 0; i < 5; ++i)
-        addCircle(GuitarService::LFretUpG + i, fretX[i], 46.0f, 18.0f, fretLabel[i]);
-    for (int i = 0; i < 5; ++i)
-        addCircle(i, fretX[i], 92.0f, 20.0f, fretLabel[i]);
-
-    // strum bar: one rect hotspot per half
-    addRect(GuitarService::LStrumUp,   60.0f, 132.0f, 212.0f, 26.0f, 8.0f, "UP");
-    addRect(GuitarService::LStrumDown, 60.0f, 158.0f, 212.0f, 26.0f, 8.0f, "DN");
-
-    // whammy bar
-    addRect(GuitarService::LWhammy, 36.0f, 198.0f, 132.0f, 36.0f, 14.0f, "WHAMMY");
-
-    // joystick: two chips -- left/right axis and up/down axis are separate
-    // LEARN targets even though they're one physical stick
-    addRect(GuitarService::LStickX, 212.0f, 250.0f, 38.0f, 26.0f, 8.0f, "L/R");
-    addRect(GuitarService::LStickY, 254.0f, 250.0f, 38.0f, 26.0f, 8.0f, "U/D");
-
-    // bottom row: minus / plus, and (Rock Band only) the tilt sensor
-    addCircle(GuitarService::LMinus, 78.0f,  308.0f, 17.0f, "-");
-    addCircle(GuitarService::LPlus,  134.0f, 308.0f, 17.0f, "+");
-    addRect(GuitarService::LTilt, 172.0f, 292.0f, 128.0f, 32.0f, 10.0f, "TILT");
+    const float gridW = startX * 2.0f + (float) cols * cellW + (float) (cols - 1) * gapX;
+    const int rows = (GuitarService::LPedalModeFwd + cols - 1) / cols;
+    const float gridH = startY * 2.0f + (float) rows * cellH + (float) (rows - 1) * gapY;
+    bodyOutline.addRoundedRectangle(0.0f, 0.0f, gridW, gridH, 10.0f);
 }
 
 void QuickBindPanel::resized()
@@ -72,7 +55,7 @@ void QuickBindPanel::resized()
 
 void QuickBindPanel::layoutHotspots()
 {
-    constexpr float canvasW = 320.0f, canvasH = 380.0f;
+    constexpr float canvasW = 360.0f, canvasH = 222.0f;   // matches buildHotspots()'s grid bounds
     const float w = (float) getWidth(), h = (float) getHeight();
     if (w <= 0.0f || h <= 0.0f)
         return;
@@ -146,8 +129,10 @@ void QuickBindPanel::drawHotspot(juce::Graphics& g, const Hotspot& hs, bool lear
 
     const auto bounds = hs.screenShape.getBounds();
     g.setColour(juce::Colours::white.withAlpha(mapped || learning || live ? 0.95f : 0.55f));
-    g.setFont(juce::Font(juce::FontOptions(juce::jmin(14.0f, bounds.getHeight() * 0.4f), juce::Font::bold)));
-    g.drawText(hs.label, bounds, juce::Justification::centred);
+    // full control names (e.g. "JOYSTICK LEFT/RIGHT") need a smaller cap
+    // than the old single-letter/short labels did to fit the pill width
+    g.setFont(juce::Font(juce::FontOptions(juce::jmin(11.0f, bounds.getHeight() * 0.4f), juce::Font::bold)));
+    g.drawText(hs.label, bounds.reduced(3.0f, 0.0f), juce::Justification::centred);
 }
 
 void QuickBindPanel::paint(juce::Graphics& g)
