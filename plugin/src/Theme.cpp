@@ -12,6 +12,8 @@ const juce::Colour gemColours[5] = {
 };
 const juce::Colour openBarColour(0xffa05ff0);
 const juce::Colour gold(0xfff2d02a);
+const juce::Colour panelBg(0xf1202024);
+const juce::Colour panelBorder = juce::Colours::white.withAlpha(0.16f);
 
 juce::Typeface::Ptr ghTypeface()
 {
@@ -22,7 +24,7 @@ juce::Typeface::Ptr ghTypeface()
 
 juce::Font ghFont(float h)
 {
-    return juce::Font(juce::FontOptions(ghTypeface()).withHeight(h));
+    return juce::Font(juce::FontOptions(h, juce::Font::bold));
 }
 
 } // namespace Theme

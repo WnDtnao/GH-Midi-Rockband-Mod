@@ -622,8 +622,31 @@ void HighwayRenderer::renderOpenGL()
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
 
+    // Rockband Mod: GH3-style intro -- the highway (everything from the
+    // board on down) stays hidden until a controller is connected and
+    // Plus/Pause is pressed once (see step()'s plus-handling); the camera
+    // swoops in from a wide establishing angle over kIntroRiseSecs once
+    // that happens, easing into the normal play position rather than
+    // cutting straight to it.
+    static constexpr float kIntroRiseSecs = 1.6f;
+    auto& svc = proc.guitar();
+    const bool revealed = svc.introRevealed.load();
+    float introT = 1.0f;
+    if (revealed)
+    {
+        const double introElapsed = now - svc.introRevealAt.load();
+        introT = (float) juce::jlimit(0.0, 1.0, introElapsed / (double) kIntroRiseSecs);
+    }
+    const float ease = 1.0f - (1.0f - introT) * (1.0f - introT) * (1.0f - introT);   // cubic ease-out
+
     // camera
-    const float eye[3] = { 0.0f, 1.62f, 0.70f };
+    const float eyeNormal[3] = { 0.0f, 1.62f, 0.70f };
+    const float eyeIntro[3]  = { 0.0f, 5.6f, 4.6f };
+    const float eye[3] = {
+        eyeIntro[0] + (eyeNormal[0] - eyeIntro[0]) * ease,
+        eyeIntro[1] + (eyeNormal[1] - eyeIntro[1]) * ease,
+        eyeIntro[2] + (eyeNormal[2] - eyeIntro[2]) * ease,
+    };
     const Mat4 view = matLookAt(eye[0], eye[1], eye[2], 0.0f, -0.30f, -3.55f);
     const Mat4 projM = matPerspective(55.0f, (float) wPx / (float) hPx, 0.1f, 60.0f);
     const Mat4 vp = matMul(projM, view);
@@ -640,6 +663,15 @@ void HighwayRenderer::renderOpenGL()
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glClear(GL_DEPTH_BUFFER_BIT);
+
+    if (! revealed)
+    {
+        // stage stays dark (background quad above already drew) until the
+        // intro is triggered -- nothing below this point (board, gems,
+        // ribbons, glow) is "the highway" the user hasn't started yet
+        ++frameCount;
+        return;
+    }
 
     // ---- board ----
     boardProg->use();
@@ -710,11 +742,28 @@ void HighwayRenderer::renderOpenGL()
         if (zTail - zHead < 0.05f && zHead - zTail < 0.05f)
             continue;
         const float fade = juce::jlimit(0.0f, 1.0f, (1.0f - (float) (headAge / kTravelSecs)) * 5.0f);
-        if (gem.mask == 0)
-            continue;
         const float heldBoost = gem.t1 < 0 ? 1.0f : 0.62f;
         // GH-style: working the whammy makes a held sustain wobble
         const float wig = gem.t1 < 0 ? wigSm : 0.0f;
+        if (gem.mask == 0)
+        {
+            // Rockband Mod: open notes (CHORDS' open bass, CHART's open
+            // strum) had a head bar (see "open-strum bars" below) but no
+            // hold texture at all -- this block used to just skip them, so
+            // a held open note travelled down the highway invisibly. A wide
+            // purple slab across the whole board, stretched over the held
+            // span instead of one ribbon per lane, matches the same
+            // dim-base + bright-core look the fretted ribbons use above.
+            const juce::Colour pc(juce::uint8(openColour[0] * 255), juce::uint8(openColour[1] * 255),
+                                  juce::uint8(openColour[2] * 255));
+            const float zCentre = (zTail + zHead) * 0.5f;
+            const float zHalf = std::abs(zHead - zTail) * 0.5f + 0.05f;
+            drawSprite(vp.data(), 0.0f, 0.020f, zCentre, kBoardHalf * 0.85f, zHalf,
+                       pc.withMultipliedBrightness(0.8f), 0.30f * fade * heldBoost, 1);
+            drawSprite(vp.data(), 0.0f, 0.024f, zCentre, kBoardHalf * 0.55f, zHalf * 0.7f,
+                       pc.brighter(0.6f), 0.55f * fade * heldBoost, 1);
+            continue;
+        }
         for (int lane = 0; lane < 5; ++lane)
         {
             if (! (gem.mask & (1 << lane)))
@@ -889,8 +938,53 @@ void HighwayRenderer::renderOpenGL()
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 
+    drawPracticeNotes(vp.data());
+
     ++frameCount;
     saveSnapshotIfRequested(wPx, hPx);
+}
+
+void HighwayRenderer::drawPracticeNotes(const float* viewProj)
+{
+    auto& svc = proc.guitar();
+    if (! svc.isPracticePlaying())
+        return;
+    const double playhead = svc.practicePlayheadSecs();
+    if (playhead < 0.0)
+        return;
+    if (playhead > svc.practiceSongLengthSecs() + kTravelSecs)
+    {
+        svc.setPracticePlaying(false);
+        return;
+    }
+
+    constexpr double kFadeInSecs = 0.4;   // a note briefly fades out rather than popping away right at its hit time
+    const auto notes = svc.getPracticeNotesInWindow(playhead - kFadeInSecs, playhead + (double) kTravelSecs);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDepthMask(GL_FALSE);
+    for (auto& n : notes)
+    {
+        const double age = n.timeSecs - playhead;
+        if (age < -kFadeInSecs || age > (double) kTravelSecs)
+            continue;
+        const float z = zForAge(juce::jmax(0.0, age));
+        const float fade = age < 0.0 ? juce::jlimit(0.0f, 1.0f, 1.0f + (float) (age / kFadeInSecs)) : 1.0f;
+        if (n.lane == 5)
+        {
+            const juce::Colour pc(juce::uint8(openColour[0] * 255), juce::uint8(openColour[1] * 255),
+                                  juce::uint8(openColour[2] * 255));
+            drawSprite(viewProj, 0.0f, 0.05f, z, kBoardHalf * 0.9f, 0.16f, pc, 0.85f * fade, 1);
+        }
+        else
+        {
+            const auto& lc = laneColours[n.lane];
+            const juce::Colour c(juce::uint8(lc[0] * 255), juce::uint8(lc[1] * 255), juce::uint8(lc[2] * 255));
+            drawSprite(viewProj, laneXw(n.lane), 0.10f, z, 0.30f, 0.30f, c, 0.9f * fade, 0);
+        }
+    }
+    glDepthMask(GL_TRUE);
 }
 
 void HighwayRenderer::drawSprite(const float* viewProj, float wx, float wy, float wz,

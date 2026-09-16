@@ -9,6 +9,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <hidapi.h>
 #include <cstring>
+#include "AudioSfx.h"
+#include "ChartFile.h"
 
 // One process-wide guitar reader shared by every GH MIDI instance.
 //
@@ -54,6 +56,16 @@ public:
         // unmapped (invalid()) for GH guitars.
         ButtonMap upperFrets[5];
         ButtonMap tilt;
+        // Some Rock Band guitars give the upper/solo frets no independent
+        // bits at all -- the same colour bit fires whether you fret low or
+        // high on the neck, and one shared bit elsewhere in the report is
+        // the only thing marking "this press is on the solo row" (confirmed
+        // on a real controller via the DEBUG byte grid: green fret sets the
+        // same byte/bit either way, plus this bit only when it's the upper
+        // row). When mapped, step() reinterprets the lower fret bits as
+        // upper ones while this is held, instead of reading upperFrets[]
+        // independently -- see step()'s comboUpper computation.
+        ButtonMap soloMod;
     };
 
     // Pedal-as-controller: a HID footswitch board fires these 7 actions by
@@ -110,6 +122,12 @@ public:
     std::atomic<int> uiEasyOct { 0 };    // CHORDS octave offset (semitones)
     std::atomic<float> uiWhammy { 0.0f };
     std::atomic<bool> guitarFound { false };
+    // Rockband Mod: GH3-style intro -- the highway stays hidden (see
+    // HighwayRenderer) until a controller is connected and sends a first
+    // Plus/Pause press (see step()'s plus-handling); demoRun() skips this,
+    // there's no real button to press in GHMIDI_DEMO=1.
+    std::atomic<bool> introRevealed { false };
+    std::atomic<double> introRevealAt { -1.0e9 };
     std::atomic<double> lastPlayedAt { -1.0e9 };  // when the HUD label last changed
     std::atomic<int> lastPlayedFrets { 0 };       // CHART pops: fret mask, drawn as coloured letters (0 = plain text)
     void announceFrets(int mask);                 // CHART: pop the held frets as letters
@@ -139,6 +157,11 @@ public:
     std::atomic<bool> virtualMidiOn { true };
     std::atomic<bool> strumSustain { false }; // on: a note lasts while the strum BAR is held, not the fret
     std::atomic<int> strumRollMs { 10 };   // ms between rolled chord notes (0 = off)  // "GH MIDI" virtual source for DAW note recording
+    // Rockband Mod: HOPO (hammer-on/pull-off) -- a fret change while a note
+    // is already ringing plays through without a fresh strum. Off by
+    // default: it's a real behaviour change to live note-triggering, opt in
+    // rather than surprise existing setups.
+    std::atomic<bool> hopoEnabled { false };
     // 3D highway gem/fret look: the original hand-built meshes, or the
     // YARG-derived textured ones (HighwayRenderer falls back to Classic if
     // the YARG assets fail to load, so this is never a hard requirement)
@@ -212,6 +235,8 @@ public:
                        LStrumDown, LStrumUp, LPlus, LMinus, LWhammy, LStickX, LStickY,
                        // Rock Band standard guitars only -- see ControllerMap
                        LFretUpG, LFretUpR, LFretUpY, LFretUpB, LFretUpO, LTilt,
+                       // shared-bit hardware only -- see ControllerMap::soloMod
+                       LSoloModifier,
                        // pedal-as-controller: HID footswitch (see PedalMap)...
                        LPedalModeFwd, LPedalModeBack, LPedalKeyUp, LPedalKeyDown,
                        LPedalOctUp, LPedalOctDown, LPedalSustain,
@@ -236,6 +261,66 @@ public:
     static bool isAxisTarget(int target) { return target == LWhammy || target == LStickX || target == LStickY; }
 
     void requestSave() { saveRequest = true; notify(); }
+
+    // ---- Standalone-only sound effects (see PluginProcessor.cpp's
+    // processBlock and README's "sounds" section) -- the engine lives here,
+    // not on GHMidiProcessor, so both the UI thread (menu/checkbox sounds)
+    // and this service's own guitar thread (the intro highway-rise) can
+    // trigger a sound the same way, through whichever GHMidiProcessor
+    // instance is actually running standalone.
+    void playSfx(int id, float gain = 1.0f) { sfx.play(id, gain); }
+    AudioSfx& sfxEngine() { return sfx; }
+
+    // ---- practice mode (Rockband Mod, MVP scope -- see README) ----
+    // loads on whichever thread calls it (UI thread, from a file chooser
+    // callback) -- parsing a chart is fast, no need to hand it to the
+    // guitar thread the way device/HID work is
+    void loadPracticeSong(const juce::File& file)
+    {
+        ChartFile cf;
+        if (! cf.loadAuto(file))
+            return;
+        const juce::ScopedLock sl(practiceLock);
+        practiceNotes = cf.getNotes();
+        practiceTitle = cf.getTitle();
+        practiceLengthSecs = cf.getLengthSecs();
+        practicePlaying = false;
+    }
+    // Play always restarts from the top (no pause/resume/seek in the MVP --
+    // see README's Practice mode section); Stop just hides the scroll.
+    void setPracticePlaying(bool playing)
+    {
+        if (playing)
+            practicePlayStartedAt = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        practicePlaying = playing;
+    }
+    bool isPracticePlaying() const { return practicePlaying.load(); }
+    juce::String practiceSongTitle() const { const juce::ScopedLock sl(practiceLock); return practiceTitle; }
+    double practiceSongLengthSecs() const { const juce::ScopedLock sl(practiceLock); return practiceLengthSecs; }
+    bool hasPracticeSong() const { const juce::ScopedLock sl(practiceLock); return ! practiceNotes.isEmpty(); }
+    // -1 = not playing; otherwise seconds since this play started
+    double practicePlayheadSecs() const
+    {
+        if (! practicePlaying.load())
+            return -1.0;
+        return juce::Time::getMillisecondCounterHiRes() * 0.001 - practicePlayStartedAt.load();
+    }
+    // only the notes whose on- or off-time falls in [fromSecs, toSecs] --
+    // the highway only ever needs a few seconds' worth per frame, not a
+    // full-array copy of a possibly thousands-of-notes chart every frame
+    juce::Array<ChartNote> getPracticeNotesInWindow(double fromSecs, double toSecs) const
+    {
+        const juce::ScopedLock sl(practiceLock);
+        juce::Array<ChartNote> result;
+        for (auto& n : practiceNotes)
+        {
+            if (n.timeSecs > toSecs)
+                break;   // sorted ascending by timeSecs -- nothing further can match either
+            if (n.timeSecs + n.lengthSecs >= fromSecs)
+                result.add(n);
+        }
+        return result;
+    }
 
     juce::String getLastPlayed() const
     {
@@ -351,8 +436,10 @@ private:
     int ringFret = -1, ringCombo = -1;
     int soloNotes[5] { -1, -1, -1, -1, -1 };  // SOLO: ringing note per fret
     int chartHeld = 0;                         // CHART: frets whose lane notes are sounding
+    bool chartOpenHeld = false;                // CHART: open note sounding, released with the strum bar
     int candCombo = -1;
     double candSince = 0.0;
+    int lastTriggerCombo = -1;   // HOPO: combo at the last strum OR hammer/pull trigger
     double sustainOnAt = -1.0;       // strum-sustain: when the ringing notes started
     bool sustainOffPending = false;  // strum-sustain: bar released before the minimum, off owed
     double lastLegatoAt = -1.0;
@@ -377,6 +464,15 @@ private:
 
     mutable juce::CriticalSection gemLock;
     juce::Array<Gem> gems;
+
+    AudioSfx sfx;
+
+    mutable juce::CriticalSection practiceLock;
+    juce::Array<ChartNote> practiceNotes;
+    juce::String practiceTitle;
+    double practiceLengthSecs = 0.0;
+    std::atomic<bool> practicePlaying { false };
+    std::atomic<double> practicePlayStartedAt { 0.0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GuitarService)
 };

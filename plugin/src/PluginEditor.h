@@ -53,6 +53,7 @@ private:
     juce::ComboBox deviceBox;
     juce::TextButton rescanBtn { "RESCAN" }, closeBtn { "X" };
     juce::ToggleButton vmidiToggle { "Virtual MIDI output (record notes in your DAW)" };
+    juce::ToggleButton hopoToggle { "HOPO (hammer-on/pull-off without a fresh strum)" };
 
     // QuickBind diagram (default) vs. the generic per-row table. The table is
     // scrollable (juce::Viewport) since LTargetCount only grows as more
@@ -86,6 +87,13 @@ private:
     // textured meshes -- see HighwayRenderer/ModelAsset
     juce::Label modelStyleLabel;
     juce::TextButton modelClassicBtn { "CLASSIC" }, modelYargBtn { "YARG" };
+
+    // Practice mode (Rockband Mod, MVP scope): load a .chart/.mid and watch
+    // its notes scroll down the highway while you play along -- see README
+    juce::Label practiceLabel;
+    juce::TextButton loadSongBtn { "LOAD SONG..." }, practicePlayBtn { "PLAY" };
+    std::unique_ptr<juce::FileChooser> songChooser;
+    void refreshPracticeLabel();
 
     // help overlay
     juce::TextButton helpCloseBtn { "X" }, moreBtn { "MORE HELP" };
