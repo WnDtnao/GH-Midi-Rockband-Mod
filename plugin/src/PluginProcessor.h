@@ -8,6 +8,7 @@
 #pragma once
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <hidapi.h>
+#include <cstring>
 
 // One process-wide guitar reader shared by every GH MIDI instance.
 //
@@ -115,6 +116,23 @@ public:
     std::atomic<bool> adapterEmpty { false };
     std::atomic<bool> hammerOn { false };   // legacy blob compat; no longer user-facing
     std::atomic<int> uiButtonBits { 0 };    // live control test: bit per LearnTarget
+
+    // ---- debug panel (Rockband Mod addition) ----
+    std::atomic<bool> debugWireframe { false };   // HighwayRenderer reads this directly
+    std::atomic<float> uiBpm { 0.0f };            // from strum downstroke timing; 0 = not enough data yet
+    struct DebugSnapshot
+    {
+        uint8_t guitar[64] {}; int guitarLen = 0;
+        uint8_t pedal[64] {};  int pedalLen = 0;
+    };
+    DebugSnapshot getDebugSnapshot() const
+    {
+        const juce::ScopedLock sl(debugLock);
+        DebugSnapshot s;
+        std::memcpy(s.guitar, debugGuitarBuf, sizeof(s.guitar)); s.guitarLen = debugGuitarLen;
+        std::memcpy(s.pedal, debugPedalBuf, sizeof(s.pedal));   s.pedalLen = debugPedalLen;
+        return s;
+    }
 
     // ---- settings (all persisted) ----
     std::atomic<int> whammyMode { 0 };      // 0 = bend + CC20, 1 = bend, 2 = CC20
@@ -345,6 +363,14 @@ private:
 
     void beginGem(int mask, bool legato);
     void endGem();
+
+    // ---- debug panel (guitar thread writes, UI thread reads via getDebugSnapshot()) ----
+    mutable juce::CriticalSection debugLock;
+    uint8_t debugGuitarBuf[64] {}; int debugGuitarLen = 0;
+    uint8_t debugPedalBuf[64] {};  int debugPedalLen = 0;
+    double strumBeatTimes[8] {};   // ring buffer of recent downstroke timestamps, newest first
+    int strumBeatCount = 0;
+    void trackBeat(double now);    // called on each downstroke edge; updates uiBpm
 
     mutable juce::CriticalSection labelLock;
     juce::String lastPlayed;

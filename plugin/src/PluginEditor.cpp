@@ -51,7 +51,7 @@ juce::Rectangle<int> hudPlate(int W, int H)
 } // namespace
 
 GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
-    : AudioProcessorEditor(p), proc(p), highway(p, *this), quickBind(p)
+    : AudioProcessorEditor(p), proc(p), highway(p, *this), quickBind(p), debugPanel(p, highway)
 {
     setOpaque(true);
     highway.setContext(&context);
@@ -65,6 +65,13 @@ GHMidiEditor::GHMidiEditor(GHMidiProcessor& p)
     gearBtn.onClick = [this] { setHelpVisible(false); setPanelVisible(! panelOpen); };
     addAndMakeVisible(helpBtn);
     helpBtn.onClick = [this] { setPanelVisible(false); setHelpVisible(! helpOpen); };
+    addAndMakeVisible(debugBtn);
+    debugBtn.onClick = [this]
+    {
+        debugOpen = ! debugOpen;
+        debugPanel.setVisible(debugOpen);
+    };
+    addChildComponent(debugPanel);
 
     // sustain selector: a radio pair, the active side in gold
     sustainLabel.setText("SUSTAIN", juce::dontSendNotification);
@@ -511,6 +518,8 @@ void GHMidiEditor::resized()
     highway.setViewSize(getWidth(), getHeight());
     gearBtn.setBounds(getWidth() - 104, 16, 92, 28);
     helpBtn.setBounds(getWidth() - 140, 16, 30, 28);
+    debugBtn.setBounds(getWidth() - 214, 16, 68, 28);
+    debugPanel.setBounds(16, 56, juce::jmin(460, getWidth() - 32), 170);
     // SUSTAIN  [FRET][STRUM]  -- flush right with SETTINGS, one row below it
     sustainStrumBtn.setBounds(getWidth() - 104 + 46, 50, 46, 22);
     sustainFretBtn.setBounds(getWidth() - 104, 50, 46, 22);

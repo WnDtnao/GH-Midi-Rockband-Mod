@@ -5,6 +5,7 @@
 #include "PluginEditor.h"
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 
 namespace {
 // easy mode: I, V, vi, IV, ii  (degree offset, isMinor)
@@ -476,6 +477,30 @@ void GuitarService::endGem()
         gems.getReference(gems.size() - 1).t1 = now;
 }
 
+// Rockband Mod (2026) addition: BPM estimate from downstroke timing, for the
+// debug panel. Median of the last few inter-onset intervals rather than a
+// simple average, so one long pause (between songs, thinking, etc.) doesn't
+// drag a stable reading off -- a median shrugs off that one outlier interval
+// the way an average can't.
+void GuitarService::trackBeat(double now)
+{
+    for (int i = 7; i > 0; --i)
+        strumBeatTimes[i] = strumBeatTimes[i - 1];
+    strumBeatTimes[0] = now;
+    if (strumBeatCount < 8)
+        ++strumBeatCount;
+    if (strumBeatCount < 3)
+        return;
+    const int n = strumBeatCount - 1;
+    double intervals[7];
+    for (int i = 0; i < n; ++i)
+        intervals[i] = strumBeatTimes[i] - strumBeatTimes[i + 1];
+    std::sort(intervals, intervals + n);
+    const double med = intervals[n / 2];
+    if (med > 0.05 && med < 3.0)   // 20-1200 BPM sanity range; outside it, leave the last good reading
+        uiBpm = (float) (60.0 / med);
+}
+
 void GuitarService::announce(const juce::String& s)
 {
     {
@@ -640,6 +665,11 @@ void GuitarService::run()
             continue;
         }
         adapterEmpty = false;
+        {
+            const juce::ScopedLock sl(debugLock);
+            std::memcpy(debugGuitarBuf, buf, (size_t) juce::jmin(got, 64));
+            debugGuitarLen = juce::jmin(got, 64);
+        }
 
         const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
         if (learnT0req.exchange(false))
@@ -963,6 +993,11 @@ void GuitarService::pollPedal()
     if (r < 2)
         return;   // no new report this tick -- a footswitch doesn't need
                    // the guitar's every-4ms strum-timing precision
+    {
+        const juce::ScopedLock sl(debugLock);
+        std::memcpy(debugPedalBuf, buf, (size_t) juce::jmin(r, 64));
+        debugPedalLen = juce::jmin(r, 64);
+    }
 
     if (isPedalLearn)
         pedalLearnTick(buf, r, now);
@@ -1286,6 +1321,8 @@ void GuitarService::step(const uint8_t* d, int len)
         strumLatchAt = now;
         latchDown = down && ! prevDown;
         latchVel = latchDown ? kVelDown : kVelUp;
+        if (latchDown)
+            trackBeat(now);   // debug panel BPM estimate: downstrokes only
     }
     prevDown = down;
     prevUp = up;

@@ -80,7 +80,8 @@ target_sources(GHMidi PRIVATE
     src/HighwayRenderer.cpp
     src/Theme.cpp
     src/QuickBindPanel.cpp
-    src/ModelAsset.cpp)
+    src/ModelAsset.cpp
+    src/DebugPanel.cpp)
 
 # assets/models/*.obj + *.png: YARG-derived (https://github.com/YARC-Official/YARG,
 # LGPL-3.0-or-later) gem/fret meshes and textures, converted once, offline,

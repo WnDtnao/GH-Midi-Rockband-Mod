@@ -23,6 +23,9 @@ public:
 
     void setContext(juce::OpenGLContext* c) { context = c; }
 
+    // Rockband Mod debug panel: read from the message thread
+    std::atomic<float> currentFps { 0.0f };
+
     // called from the message thread; read atomically on the GL thread
     void setViewSize(int w, int h) noexcept
     {

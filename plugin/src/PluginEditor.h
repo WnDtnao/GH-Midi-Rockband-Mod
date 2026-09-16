@@ -2,6 +2,7 @@
 #include "PluginProcessor.h"
 #include "HighwayRenderer.h"
 #include "QuickBindPanel.h"
+#include "DebugPanel.h"
 
 // 3D highway underneath (OpenGL); HUD, settings panel (device + QuickBind
 // diagram / mapping table) and help overlay composited on top.
@@ -29,10 +30,14 @@ private:
     HighwayRenderer highway;
     juce::OpenGLContext context;
     QuickBindPanel quickBind;
+    DebugPanel debugPanel;
 
     bool panelOpen = false, helpOpen = false;
+    // independent of panelOpen/helpOpen -- diagnostics stay useful while
+    // playing normally, not just as a modal overlay
+    bool debugOpen = false;
 
-    juce::TextButton gearBtn { "SETTINGS" }, helpBtn { "?" };
+    juce::TextButton gearBtn { "SETTINGS" }, helpBtn { "?" }, debugBtn { "DEBUG" };
 
     // which control decides how long a note lasts: the fret (default) or the
     // strum bar. Lives on the main view under ? / SETTINGS, not in the panel.

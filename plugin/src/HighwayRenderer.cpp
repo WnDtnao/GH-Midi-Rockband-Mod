@@ -659,6 +659,9 @@ void HighwayRenderer::renderOpenGL()
     const float dt = (float) (lastFrameTime < 0.0 ? 1.0 / 60.0
                               : juce::jlimit(0.001, 0.1, now - lastFrameTime));
     lastFrameTime = now;
+    // Rockband Mod debug panel: smoothed FPS (a raw 1/dt reading jitters too
+    // much frame to frame to be readable)
+    currentFps = currentFps.load() * 0.9f + (1.0f / dt) * 0.1f;
     const float pressAlpha = 1.0f - std::exp(-dt * 26.0f);
     for (int i = 0; i < 5; ++i)
     {
@@ -728,6 +731,12 @@ void HighwayRenderer::renderOpenGL()
     // ---- solid meshes ----
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
+    // Rockband Mod debug panel: wireframe toggle, gems/buttons only (the
+    // board and background are shader-only quads -- wireframe on those
+    // would just show two triangles, not useful for inspecting geometry)
+    const bool wireframe = proc.guitar().debugWireframe.load();
+    if (wireframe)
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     meshProg->use();
     meshProg->setUniformMat4("uViewProj", vp.data(), 1, GL_FALSE);
     meshProg->setUniform("uEye", eye[0], eye[1], eye[2]);
@@ -819,6 +828,8 @@ void HighwayRenderer::renderOpenGL()
             }
         }
     }
+    if (wireframe)
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
     // open-strum bars (solid purple slab via ribbon, then glow)
     glEnable(GL_BLEND);
